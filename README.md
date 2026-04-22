@@ -14,6 +14,8 @@ This directory contains a draft self-hosted data distribution portal for
 ## Quick Start
 
 1. Copy `.env.example` to `.env` and replace the MinIO credentials.
+   Set `MINIO_DATA_PATH` to the host path where MinIO should store data, ideally
+   your RAID-backed mount such as `/data/raid/minio`.
 2. Copy `broker-api/config/tokens.example.json` to
    `broker-api/config/tokens.json` and replace the sample tokens.
 3. Start the stack:
@@ -36,6 +38,17 @@ docker compose restart nginx
 
 The `certbot` container will renew existing certificates automatically. The Nginx
 container also watches the certificate directory and reloads itself after renewals.
+
+## Storage Location
+
+MinIO stores object data on the host path defined by `MINIO_DATA_PATH` in `.env`.
+That path is mounted into the container as `/data`.
+
+Example:
+
+```env
+MINIO_DATA_PATH=/data/raid/minio
+```
 
 ## Multi-Subdomain Routing
 
