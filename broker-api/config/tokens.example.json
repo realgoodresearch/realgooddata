@@ -1,0 +1,27 @@
+{
+  "tokens": {
+    "partner-alpha-2026-rotate-me": {
+      "label": "Partner Alpha",
+      "expires_at": "2026-12-31T23:59:59Z",
+      "allow": [
+        {
+          "bucket": "population-estimates",
+          "prefix": "shared/"
+        },
+        {
+          "bucket": "population-estimates",
+          "prefix": "partners/alpha/"
+        }
+      ]
+    },
+    "partner-beta-2026-rotate-me": {
+      "label": "Partner Beta",
+      "allow": [
+        {
+          "bucket": "population-estimates",
+          "prefix": "shared/"
+        }
+      ]
+    }
+  }
+}
