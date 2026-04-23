@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://data.realgoodresearch.com/schemas/download-response.schema.json",
+  "type": "object",
+  "required": [
+    "dataset_id",
+    "allowed",
+    "reason",
+    "download_url",
+    "expires_in"
+  ],
+  "properties": {
+    "dataset_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "allowed": {
+      "type": "boolean"
+    },
+    "reason": {
+      "type": "string",
+      "enum": [
+        "public",
+        "token_granted",
+        "token_required",
+        "confidential_no_download"
+      ]
+    },
+    "download_url": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uri"
+    },
+    "expires_in": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    }
+  },
+  "additionalProperties": false
+}

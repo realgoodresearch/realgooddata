@@ -1,0 +1,105 @@
+insert into datasets (
+    id,
+    slug,
+    title,
+    summary,
+    classification,
+    visibility,
+    storage_bucket,
+    storage_key,
+    mime_type,
+    published_at
+) values
+    (
+        '11111111-1111-1111-1111-111111111111',
+        'gaza-population-estimates-apr-2026',
+        'Gaza Population Estimates, April 2026',
+        'Public governorate-level population estimates for operational planning.',
+        'public',
+        'listed',
+        'public',
+        'gaza/population-estimates-apr-2026.csv',
+        'text/csv',
+        '2026-04-01T00:00:00Z'
+    ),
+    (
+        '22222222-2222-2222-2222-222222222222',
+        'gaza-partner-briefing-alpha-apr-2026',
+        'Gaza Partner Briefing Alpha, April 2026',
+        'Restricted partner release with additional breakdowns.',
+        'restricted',
+        'listed',
+        'gazanowpop',
+        'restricted/partner-alpha/briefing-apr-2026.xlsx',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        '2026-04-02T00:00:00Z'
+    ),
+    (
+        '33333333-3333-3333-3333-333333333333',
+        'gaza-method-notes-confidential-apr-2026',
+        'Gaza Method Notes, Confidential, April 2026',
+        'Confidential reference notes listed for transparency but never downloadable.',
+        'confidential',
+        'listed',
+        'gazanowpop',
+        'strictly-confidential/method-notes-apr-2026.pdf',
+        'application/pdf',
+        '2026-04-03T00:00:00Z'
+    )
+on conflict (id) do nothing;
+
+insert into dataset_tags (dataset_id, tag) values
+    ('11111111-1111-1111-1111-111111111111', 'public'),
+    ('11111111-1111-1111-1111-111111111111', 'population'),
+    ('11111111-1111-1111-1111-111111111111', 'gaza'),
+    ('22222222-2222-2222-2222-222222222222', 'restricted'),
+    ('22222222-2222-2222-2222-222222222222', 'partner-alpha'),
+    ('33333333-3333-3333-3333-333333333333', 'confidential'),
+    ('33333333-3333-3333-3333-333333333333', 'methods')
+on conflict do nothing;
+
+insert into access_tokens (
+    id,
+    token_hash,
+    label,
+    status,
+    expires_at
+) values
+    (
+        'aaaaaaa1-aaaa-aaaa-aaaa-aaaaaaaaaaa1',
+        '53d3556e6ea2d7e42a245cda103408d459dc7aee354f782bef243f53ce18d601',
+        'Partner Alpha',
+        'active',
+        '2026-12-31T23:59:59Z'
+    ),
+    (
+        'bbbbbbb2-bbbb-bbbb-bbbb-bbbbbbbbbbb2',
+        '761ff32146fc02ddb130c2ebf71ba43f588c984e0ee64b0c6e2f36169e4a7e23',
+        'Partner Beta',
+        'active',
+        null
+    )
+on conflict (id) do nothing;
+
+insert into token_grants (
+    id,
+    token_id,
+    bucket,
+    key_prefix,
+    effect
+) values
+    (
+        'ccccccc3-cccc-cccc-cccc-ccccccccccc3',
+        'aaaaaaa1-aaaa-aaaa-aaaa-aaaaaaaaaaa1',
+        'gazanowpop',
+        'restricted/partner-alpha/',
+        'allow'
+    ),
+    (
+        'ddddddd4-dddd-dddd-dddd-ddddddddddd4',
+        'bbbbbbb2-bbbb-bbbb-bbbb-bbbbbbbbbbb2',
+        'gazanowpop',
+        'restricted/shared/',
+        'allow'
+    )
+on conflict (id) do nothing;

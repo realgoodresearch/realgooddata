@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://data.realgoodresearch.com/schemas/download-request.schema.json",
+  "type": "object",
+  "required": [
+    "dataset_id"
+  ],
+  "properties": {
+    "dataset_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "download_filename": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

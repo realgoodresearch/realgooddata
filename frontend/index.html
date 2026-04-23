@@ -78,9 +78,12 @@
           <li>API health: <code>/api/healthz</code></li>
           <li>Allowed catalog: <code>/api/v1/catalog</code></li>
           <li>Presigned download: <code>/api/v1/download-url</code></li>
+          <li>Dataset detail: <code>/api/v1/datasets/&lt;slug&gt;</code></li>
         </ul>
         <p>
-          Requests to the API must include an <code>X-Access-Token</code> header.
+          Public datasets can be listed and downloaded without a token. Restricted
+          items require an <code>X-Access-Token</code> header. Confidential items
+          are listed but never downloadable.
         </p>
       </section>
     </main>
