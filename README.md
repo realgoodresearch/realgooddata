@@ -177,3 +177,37 @@ curl -X POST https://data.realgoodresearch.com/api/v1/download-url \
 
 JSON Schemas for the catalog and download endpoints live in
 [broker-api/schemas](/home/doug/git/realgoodresearch/sysadmin/data-portal/broker-api/schemas:1).
+
+## Quarto Frontend
+
+The generated `frontend/` directory is now treated as a build artifact and does
+not need to be committed. The Quarto source of truth lives under
+[site](/home/doug/git/realgoodresearch/sysadmin/data-portal/site:1).
+
+The hand-served files in `frontend/` are produced by the Quarto-built site
+defined under [site](/home/doug/git/realgoodresearch/sysadmin/data-portal/site:1).
+The Quarto source mirrors the typography and navigation style used in the main
+Real Good Research docs site, while the browser-side catalog logic stays in
+`site/assets/catalog.js`.
+
+The Quarto project is configured to render directly into `frontend/`:
+
+```bash
+cd data-portal/site
+quarto render
+```
+
+Render directly in place. Do not rename or replace the `frontend/` directory
+while Nginx is running, or the bind mount can point at a stale empty directory
+and return `403`.
+
+Safe workflow:
+
+```bash
+cd data-portal/site
+quarto render
+docker compose -f ../docker-compose.yml up -d --force-recreate nginx
+```
+
+This environment does not have `quarto` installed, so I could not run the render
+here.

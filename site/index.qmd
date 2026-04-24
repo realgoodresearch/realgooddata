@@ -1,0 +1,50 @@
+---
+title: "Real Good Data"
+subtitle: "Sharing our data to help you do good things."
+title-block: false
+---
+
+```{=html}
+<div class="catalogue-shell">
+  <section class="toolbar" aria-label="Catalogue filters">
+    <div class="toolbar-group search">
+      <div class="search-row">
+        <input id="search-input" type="text" placeholder="Search titles, summaries, tags, or slugs">
+        <button
+          id="token-trigger"
+          class="token-trigger button-secondary"
+          type="button"
+          aria-label="Provide access token to unlock restricted data."
+          title="Provide access token to unlock restricted data.">
+          <span aria-hidden="true">🔒</span>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <section id="catalogue" class="catalog-grid" aria-live="polite"></section>
+</div>
+
+<div id="token-modal" class="token-modal hidden" aria-hidden="true">
+  <div class="token-modal-backdrop" data-close-modal="true"></div>
+  <div class="token-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="token-modal-title">
+    <div class="token-modal-header">
+      <h2 id="token-modal-title">Restricted Data Access</h2>
+      <button id="token-modal-close" class="button-secondary modal-close" type="button" aria-label="Close">
+        <span aria-hidden="true">×</span>
+      </button>
+    </div>
+    <p class="sidebar-copy">Provide access token to unlock restricted data.</p>
+    <div class="token-panel modal-token-panel">
+      <label class="field-label" for="token-input">Access token</label>
+      <input id="token-input" type="password" placeholder="Paste token here"><br><br>
+      <div class="token-actions">
+        <button id="apply-token" class="button-primary" type="button">Apply</button>
+        <button id="clear-token" class="button-secondary" type="button">Clear</button>
+      </div>
+    </div>
+  </div>
+</div>
+```
+
+<script src="assets/catalog.js"></script>

@@ -2,5 +2,6 @@
 certbot/conf/
 certbot/www/
 data/
+frontend/
 broker-api/config/tokens.json
 __pycache__/

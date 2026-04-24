@@ -1,0 +1,510 @@
+/*-- scss:defaults --*/
+
+@import url('https://fonts.googleapis.com/css2?family=Mulish:wght@300;700;900&family=Roboto:wght@300;400;700&display=swap');
+
+$white: #ffffff;
+$black: #000000;
+$light-grey: #f9f9f9;
+$border-color: #eeeeee;
+$text-main: #1a1a1a;
+$text-muted: #6f7a80;
+$accent-blue: #3498db;
+$accent-blue-dark: #2788ca;
+$accent-blue-soft: #eef7fd;
+$public-green: #2f6b43;
+$restricted-gold: #8a6511;
+$confidential-red: #8b2d3b;
+
+$body-bg: $white;
+$body-color: $text-main;
+$link-color: $accent-blue;
+$font-family-sans-serif: "Roboto", sans-serif;
+$headings-font-family: "Mulish", sans-serif;
+
+$navbar-bg: $black;
+$navbar-fg: $white;
+$navbar-hl: $accent-blue;
+
+/*-- scss:rules --*/
+
+body {
+    padding-bottom: 70px;
+}
+
+.navbar {
+    padding: 0.8rem 0;
+    font-family: "Mulish", sans-serif;
+    font-weight: 700;
+}
+
+h1.title,
+h1,
+h2,
+h3 {
+    font-family: "Mulish", sans-serif;
+    font-weight: 900;
+    letter-spacing: -0.04em;
+    color: $black;
+}
+
+.custom-footer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    background-color: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(5px);
+    border-top: 1px solid $border-color;
+    z-index: 1050;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: "Mulish", sans-serif;
+    font-size: 0.85rem;
+    color: #7f8c8d;
+    padding: 12px 40px;
+}
+
+.page-columns.page-full {
+    gap: 0;
+}
+
+main.content {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 28px 22px 56px;
+}
+
+.catalogue-shell {
+    display: grid;
+    gap: 18px;
+}
+
+.utility-strip {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 16px;
+    border: 1px solid $border-color;
+    border-radius: 4px;
+    background: #fcfcfb;
+}
+
+.utility-metrics {
+    margin-top: 0;
+}
+
+.utility-status {
+    margin: 0;
+    white-space: nowrap;
+}
+
+.hero-card,
+.control-card,
+.status-card,
+.dataset-card {
+    background: $white;
+    border: 1px solid $border-color;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+}
+
+.hero-card,
+.control-card,
+.dataset-card {
+    padding: 22px;
+}
+
+.hero-card {
+    display: grid;
+    gap: 18px;
+}
+
+.eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: $text-muted;
+    font-size: 0.85rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-family: "Mulish", sans-serif;
+    font-weight: 700;
+}
+
+.catalogue-shell .hero-title {
+    margin: 16px 0 12px;
+    font-size: clamp(2.2rem, 4.4vw, 3.6rem);
+    line-height: 0.98;
+    letter-spacing: -0.02em;
+}
+
+.hero-copy {
+    max-width: 46rem;
+    margin: 0;
+    color: $text-muted;
+    font-size: 1rem;
+    line-height: 1.75;
+}
+
+.hero-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+.metric {
+    min-width: 120px;
+    padding: 12px 14px;
+    border-radius: 8px;
+    background: #fbfaf7;
+    border: 1px solid $border-color;
+}
+
+.metric strong {
+    display: block;
+    font-size: 1.35rem;
+    line-height: 1;
+    font-weight: 900;
+    font-family: "Mulish", sans-serif;
+}
+
+.metric span {
+    color: $text-muted;
+    font-size: 0.88rem;
+}
+
+.control-card h2 {
+    margin: 0 0 10px;
+    font-size: 1.15rem;
+}
+
+.token-panel {
+    border-top: 1px solid $border-color;
+    padding-top: 18px;
+}
+
+.control-card p,
+.hero-copy,
+.access-note,
+.field-label,
+.status-card,
+.summary,
+.slug,
+.meta {
+    color: $text-muted;
+}
+
+.field-label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 0.95rem;
+}
+
+.token-row,
+.toolbar {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.toolbar {
+    margin: 0;
+    align-items: end;
+}
+
+.search-row {
+    display: flex;
+    gap: 10px;
+    align-items: end;
+}
+
+.search-row input {
+    flex: 1 1 auto;
+}
+
+.token-trigger {
+    width: 48px;
+    min-width: 48px;
+    height: 48px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.05rem;
+}
+
+input[type="text"],
+input[type="password"],
+select {
+    width: 100%;
+    padding: 12px 13px;
+    border: 1px solid $border-color;
+    border-radius: 8px;
+    background: $white;
+    color: $text-main;
+    font-family: "Roboto", sans-serif;
+}
+
+.token-row input {
+    flex: 1 1 220px;
+    min-width: 220px;
+}
+
+.token-row button {
+    flex: 0 0 auto;
+}
+
+.token-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.toolbar-group {
+    min-width: 180px;
+    flex: 1 1 240px;
+}
+
+.toolbar-group.search {
+    flex: 2 1 340px;
+}
+
+button {
+    border: 0;
+    border-radius: 8px;
+    padding: 12px 15px;
+    cursor: pointer;
+    transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+    font-size: 0.96rem;
+    font-family: "Mulish", sans-serif;
+    font-weight: 700;
+}
+
+.button-primary {
+    background: $accent-blue;
+    color: $white;
+}
+
+.button-primary:hover {
+    background: $accent-blue-dark;
+}
+
+.button-secondary {
+    background: #f1f0eb;
+    color: $text-main;
+}
+
+.button-secondary:hover {
+    background: #e9e8e2;
+}
+
+.status-card {
+    padding: 16px 18px;
+    box-shadow: none;
+}
+
+.status-card.error {
+    border-color: #ead5d9;
+    background: #fff7f7;
+    color: $confidential-red;
+}
+
+.token-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+}
+
+.token-modal.hidden {
+    display: none;
+}
+
+.token-modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+}
+
+.token-modal-dialog {
+    position: relative;
+    max-width: 460px;
+    margin: 12vh auto 0;
+    padding: 22px;
+    background: $white;
+    border: 1px solid $border-color;
+    border-radius: 6px;
+    box-shadow: 0 18px 60px rgba(0, 0, 0, 0.16);
+}
+
+.token-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.token-modal-header h2 {
+    margin: 0;
+    font-size: 1.2rem;
+}
+
+.modal-close {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+}
+
+.modal-token-panel {
+    border-top: 0;
+    padding-top: 0;
+}
+
+.catalog-grid {
+    display: grid;
+    gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+
+.dataset-card {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.dataset-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: start;
+}
+
+.dataset-card h3 {
+    margin: 0;
+    font-size: 1.18rem;
+    line-height: 1.2;
+}
+
+.slug {
+    margin-top: 4px;
+    font-size: 0.88rem;
+}
+
+.badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 9px;
+    border-radius: 999px;
+    font-size: 0.76rem;
+    font-weight: bold;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    font-family: "Mulish", sans-serif;
+}
+
+.badge.public {
+    color: $public-green;
+    background: rgba(45, 112, 69, 0.12);
+}
+
+.badge.restricted {
+    color: $restricted-gold;
+    background: rgba(141, 93, 16, 0.12);
+}
+
+.badge.confidential {
+    color: $confidential-red;
+    background: rgba(122, 38, 51, 0.11);
+}
+
+.summary {
+    margin: 0;
+    line-height: 1.6;
+    font-size: 0.98rem;
+}
+
+.meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 0.88rem;
+}
+
+.meta span {
+    padding: 6px 9px;
+    border-radius: 999px;
+    background: #f5f4ef;
+}
+
+.tag-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.tag {
+    padding: 5px 9px;
+    border-radius: 999px;
+    background: $accent-blue-soft;
+    color: $accent-blue;
+    font-size: 0.8rem;
+}
+
+.dataset-footer {
+    margin-top: auto;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: end;
+}
+
+.access-note {
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.download-button[disabled] {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.empty-state {
+    padding: 26px;
+    text-align: center;
+    color: $text-muted;
+    background: #fcfbf8;
+    border: 1px dashed $border-color;
+    border-radius: 4px;
+}
+
+@media (max-width: 900px) {
+    main.content {
+        padding: 18px 16px 44px;
+    }
+
+    .utility-strip {
+        flex-direction: column;
+        align-items: start;
+    }
+
+    .utility-status {
+        white-space: normal;
+    }
+
+    .search-row {
+        width: 100%;
+    }
+
+    .token-modal-dialog {
+        margin: 10vh 16px 0;
+    }
+}

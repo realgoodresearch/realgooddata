@@ -1,0 +1,34 @@
+project:
+  type: website
+  output-dir: ../frontend
+
+website:
+  title: "Real Good Data"
+  search: false
+  navbar:
+    background: black
+    type: dark
+    border: true
+    right:
+      - href: https://data.realgoodresearch.com
+        text: Data
+      - href: https://docs.realgoodresearch.com
+        text: Docs
+      - href: https://github.com/realgoodresearch
+        target: _blank
+        text: Code
+      - href: https://realgoodresearch.com
+        target: _blank
+        text: Home
+
+format:
+  html:
+    theme:
+      - cosmo
+      - custom-theme.scss
+    include-after-body: _footer.html
+    toc: false
+    page-layout: full
+
+execute:
+  freeze: false
