@@ -40,6 +40,42 @@ docker compose restart nginx
 The `certbot` container will renew existing certificates automatically. The Nginx
 container also watches the certificate directory and reloads itself after renewals.
 
+## Admin Panel
+
+The broker now serves a minimal admin panel at `/admin`.
+
+The nginx config currently restricts `/admin` to:
+
+- `127.0.0.1`
+- `::1`
+- `10.6.0.0/24`
+
+Anything outside that VPN/local range receives `403 Forbidden` before the login
+page is reached.
+
+Set these additional env vars in `.env` before rebuilding the broker:
+
+```env
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=replace-with-a-long-random-password
+ADMIN_SESSION_SECRET=replace-with-a-separate-long-random-secret
+ADMIN_SESSION_TTL_SECONDS=43200
+```
+
+Then rebuild the broker and restart Nginx:
+
+```bash
+docker compose up -d --build broker-api nginx
+```
+
+The first admin release supports:
+
+- env-based login at `/admin/login`
+- token creation and revocation
+- collection create/edit
+- dataset create/edit
+- README selection from existing MinIO PDF objects
+
 ## Storage Location
 
 MinIO stores object data on the host path defined by `MINIO_DATA_PATH` in `.env`.

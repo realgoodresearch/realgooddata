@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin Tokens</title>
+  <link rel="stylesheet" href="{{ request.url_for('admin-static', path='admin.css') }}">
+</head>
+<body>
+  <header class="admin-topbar">
+    <div>
+      <p class="eyebrow">Real Good Data Admin</p>
+      <h1>Token Management</h1>
+      <nav class="admin-nav">
+        <a href="/admin/catalog" class="{% if current_section == 'catalog' %}active{% endif %}">Catalog</a>
+        <a href="/admin/tokens" class="{% if current_section == 'tokens' %}active{% endif %}">Tokens</a>
+      </nav>
+    </div>
+    <form method="post" action="/admin/logout">
+      <button type="submit" class="button-secondary">Log out</button>
+    </form>
+  </header>
+
+  <main class="admin-layout">
+    {% if message %}<div class="notice success">{{ message }}</div>{% endif %}
+    {% if error %}<div class="notice error">{{ error }}</div>{% endif %}
+    {% if plaintext_token %}
+    <div class="notice token-reveal">
+      <strong>Plaintext token</strong>
+      <code>{{ plaintext_token }}</code>
+      <p>Save this now. Only the hash is stored in the database.</p>
+    </div>
+    {% endif %}
+
+    <section class="panel">
+      <h2>Create Token</h2>
+      <p class="muted">Default use-case: grant access to all restricted files in a bucket.</p>
+      <form method="post" action="/admin/tokens" class="form-grid form-stack">
+        <label class="full">
+          <span>Plaintext token</span>
+          <input type="text" name="plaintext_token" placeholder="Optional prefix; a random suffix is always added">
+        </label>
+        <br>
+        <label class="full">
+          <span>Label</span>
+          <input type="text" name="label" required>
+        </label>
+        <br>
+        <label class="full">
+          <span>Expires at</span>
+          <input type="datetime-local" name="expires_at">
+        </label>
+        <br>
+        <label class="full">
+          <span>Grant mode</span>
+          <select name="grant_mode">
+            <option value="bucket" selected>Bucket / prefix / classification</option>
+            <option value="dataset">Single dataset</option>
+            <option value="none">No grant yet</option>
+          </select>
+        </label>
+        <br>
+        <label class="full">
+          <span>Classification</span>
+          <select name="classification">
+            <option value="restricted" selected>restricted</option>
+            <option value="public">public</option>
+            <option value="confidential">confidential</option>
+          </select>
+        </label>
+        <br>
+        <label class="full">
+          <span>Bucket</span>
+          <input type="text" name="bucket" list="bucket-options">
+        </label>
+        <br>
+        <label class="full">
+          <span>Key prefix</span>
+          <input type="text" name="key_prefix" placeholder="restricted/partner-alpha/">
+        </label>
+        <br>
+        <label class="full">
+          <span>Single dataset grant</span>
+          <select name="dataset_id">
+            <option value="">None</option>
+            {% for dataset in dataset_choices %}
+            <option value="{{ dataset.id }}">{{ dataset.collection_title or 'Standalone' }} / {{ dataset.title }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <div class="full actions">
+          <button type="submit" class="button-primary">Create token</button>
+        </div>
+      </form>
+      <datalist id="bucket-options">
+        {% for bucket_name in bucket_names %}
+        <option value="{{ bucket_name }}"></option>
+        {% endfor %}
+      </datalist>
+    </section>
+
+    <section class="panel">
+      <h2>Tokens</h2>
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>Label</th>
+            <th>Status</th>
+            <th>Expires</th>
+            <th>Grants</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for token in tokens %}
+          <tr>
+            <td>{{ token.label }}</td>
+            <td>{{ token.status }}</td>
+            <td>{{ token.expires_at or 'Never' }}</td>
+            <td>
+              {% for grant in token.grants %}
+              <div class="grant-line">
+                {% if grant.dataset_id %}dataset {{ grant.dataset_id }}{% endif %}
+                {% if grant.classification %}{{ grant.classification }}{% endif %}
+                {% if grant.bucket %}{{ grant.bucket }}{% endif %}
+                {% if grant.key_prefix %}{{ grant.key_prefix }}{% endif %}
+              </div>
+              {% endfor %}
+            </td>
+            <td>
+              {% if token.status != 'revoked' %}
+              <form method="post" action="/admin/tokens/{{ token.id }}/revoke">
+                <button type="submit" class="button-secondary">Revoke</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

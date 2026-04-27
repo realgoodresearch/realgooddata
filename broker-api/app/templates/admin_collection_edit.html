@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Edit Collection</title>
+  <link rel="stylesheet" href="{{ request.url_for('admin-static', path='admin.css') }}">
+</head>
+<body>
+  <header class="admin-topbar">
+    <div>
+      <p class="eyebrow">Real Good Data Admin</p>
+      <h1>Edit Collection</h1>
+      <nav class="admin-nav">
+        <a href="/admin/catalog" class="active">Catalog</a>
+        <a href="/admin/tokens">Tokens</a>
+      </nav>
+    </div>
+    <a href="/admin/catalog" class="button-secondary button-link">Back to catalog</a>
+  </header>
+  <main class="admin-layout single-panel">
+    {% if message %}<div class="notice success">{{ message }}</div>{% endif %}
+    {% if error %}<div class="notice error">{{ error }}</div>{% endif %}
+    <section class="panel">
+      <form method="post" action="/admin/collections/{{ edit_collection.id }}" class="form-grid form-stack">
+        <label>
+          <span>Title</span>
+          <input type="text" name="title" value="{{ edit_collection.title }}" required>
+        </label>
+        <br>
+        <label>
+          <span>Slug</span>
+          <input type="text" name="slug" value="{{ edit_collection.slug }}" required>
+        </label>
+        <br>
+        <label class="full">
+          <span>Summary</span>
+          <textarea name="summary" rows="4">{{ edit_collection.summary or '' }}</textarea>
+        </label>
+        <br>
+        <label>
+          <span>Published at</span>
+          <input type="datetime-local" name="published_at" value="{{ edit_collection.published_at.strftime('%Y-%m-%dT%H:%M') if edit_collection.published_at else '' }}">
+        </label>
+        <br>
+        <label class="full">
+          <span>README file</span>
+          <select name="readme_object">
+            <option value="">None</option>
+            {% for option in readme_options %}
+            <option value="{{ option.bucket }}::{{ option.key }}" {% if edit_collection.readme_bucket == option.bucket and edit_collection.readme_key == option.key %}selected{% endif %}>{{ option.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <br>
+        <div class="full actions">
+          <button type="submit" class="button-primary">Save collection</button>
+        </div>
+      </form>
+      <datalist id="bucket-options">
+        {% for bucket_name in bucket_names %}
+        <option value="{{ bucket_name }}"></option>
+        {% endfor %}
+      </datalist>
+    </section>
+  </main>
+</body>
+</html>

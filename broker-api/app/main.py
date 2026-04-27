@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import base64
 from datetime import UTC, datetime
 from functools import lru_cache
 import hashlib
+import hmac
+import json
+from pathlib import Path
+import secrets
+import time
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -10,7 +16,10 @@ import boto3
 from botocore.client import BaseClient
 from botocore.config import Config
 from botocore.exceptions import ClientError
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 import psycopg
 from psycopg.rows import dict_row
 from pydantic import BaseModel, Field
@@ -40,6 +49,10 @@ class Settings(BaseSettings):
     minio_secret_key: str
     minio_secure: bool = False
     presigned_url_ttl_seconds: int = 300
+    admin_username: str
+    admin_password: str
+    admin_session_secret: str
+    admin_session_ttl_seconds: int = 43200
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -160,6 +173,10 @@ def get_settings() -> Settings:
     return Settings()
 
 
+APP_DIR = Path(__file__).resolve().parent
+templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
+
+
 def build_s3_client(endpoint_url: str) -> BaseClient:
     settings = get_settings()
     return boto3.client(
@@ -186,6 +203,115 @@ def get_presign_s3_client() -> BaseClient:
 
 def fingerprint_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def parse_optional_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def parse_optional_uuid(value: str | None) -> UUID | None:
+    if not value:
+        return None
+    return UUID(value)
+
+
+def parse_optional_int(value: str | None) -> int | None:
+    if value in {None, ""}:
+        return None
+    return int(value)
+
+
+def normalize_tags(value: str | None) -> list[str]:
+    if not value:
+        return []
+    seen: set[str] = set()
+    tags: list[str] = []
+    for raw_tag in value.split(","):
+        tag = raw_tag.strip()
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        tags.append(tag)
+    return tags
+
+
+def parse_readme_selection(value: str | None) -> tuple[str | None, str | None]:
+    if not value:
+        return None, None
+    bucket, separator, key = value.partition("::")
+    if not separator or not bucket or not key:
+        return None, None
+    return bucket, key
+
+
+def build_admin_session(settings: Settings) -> str:
+    payload = {
+        "u": settings.admin_username,
+        "exp": int(time.time()) + settings.admin_session_ttl_seconds,
+    }
+    payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    payload_b64 = base64.urlsafe_b64encode(payload_bytes).decode("ascii").rstrip("=")
+    signature = hmac.new(
+        settings.admin_session_secret.encode("utf-8"),
+        payload_b64.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{payload_b64}.{signature}"
+
+
+def verify_admin_session(session_value: str | None, settings: Settings) -> bool:
+    if not session_value or "." not in session_value:
+        return False
+    payload_b64, signature = session_value.rsplit(".", 1)
+    expected_signature = hmac.new(
+        settings.admin_session_secret.encode("utf-8"),
+        payload_b64.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(signature, expected_signature):
+        return False
+
+    padding = "=" * (-len(payload_b64) % 4)
+    try:
+        payload = json.loads(
+            base64.urlsafe_b64decode((payload_b64 + padding).encode("ascii"))
+        )
+    except (ValueError, json.JSONDecodeError):
+        return False
+
+    return (
+        payload.get("u") == settings.admin_username
+        and int(payload.get("exp", 0)) > int(time.time())
+    )
+
+
+def admin_authenticated(request: Request, settings: Settings) -> bool:
+    return verify_admin_session(request.cookies.get("rrg_admin_session"), settings)
+
+
+def admin_login_redirect() -> RedirectResponse:
+    return RedirectResponse(url="/admin/login", status_code=status.HTTP_303_SEE_OTHER)
+
+
+def set_admin_session_cookie(response: RedirectResponse, settings: Settings) -> None:
+    response.set_cookie(
+        key="rrg_admin_session",
+        value=build_admin_session(settings),
+        max_age=settings.admin_session_ttl_seconds,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/admin",
+    )
+
+
+def clear_admin_session_cookie(response: RedirectResponse) -> None:
+    response.delete_cookie(key="rrg_admin_session", path="/admin")
 
 
 def get_db_connection(settings: Settings = Depends(get_settings)):
@@ -404,6 +530,185 @@ def load_collection_datasets(connection, collection_id: UUID) -> list[DatasetRec
     return [DatasetRecord.model_validate(row) for row in rows]
 
 
+def load_admin_collection_rows(connection) -> list[dict]:
+    return connection.execute(
+        """
+        select
+          c.id,
+          c.slug,
+          c.title,
+          c.summary,
+          c.readme_bucket,
+          c.readme_key,
+          c.published_at,
+          count(d.id) filter (where d.visibility = 'listed') as dataset_count
+        from collections c
+        left join datasets d on d.collection_id = c.id
+        group by c.id
+        order by c.published_at desc nulls last, c.title asc
+        """
+    ).fetchall()
+
+
+def load_admin_collection_row(connection, collection_id: UUID) -> dict | None:
+    return connection.execute(
+        """
+        select
+          id,
+          slug,
+          title,
+          summary,
+          readme_bucket,
+          readme_key,
+          published_at
+        from collections
+        where id = %(collection_id)s
+        """,
+        {"collection_id": str(collection_id)},
+    ).fetchone()
+
+
+def load_admin_dataset_rows(connection, collection_id: UUID | None = None) -> list[dict]:
+    query = """
+        select
+          d.id,
+          d.collection_id,
+          c.title as collection_title,
+          d.slug,
+          d.title,
+          d.summary,
+          d.classification,
+          d.visibility,
+          d.storage_bucket,
+          d.storage_key,
+          d.file_size_bytes,
+          d.sort_order,
+          d.published_at,
+          coalesce(string_agg(distinct t.tag, ', ' order by t.tag), '') as tags
+        from datasets d
+        left join collections c on c.id = d.collection_id
+        left join dataset_tags t on t.dataset_id = d.id
+    """
+    params: dict[str, str] = {}
+    if collection_id:
+        query += " where d.collection_id = %(collection_id)s"
+        params["collection_id"] = str(collection_id)
+    query += """
+        group by d.id, c.title
+        order by coalesce(c.title, ''), d.sort_order asc, d.published_at desc nulls last, d.title asc
+    """
+    return connection.execute(query, params).fetchall()
+
+
+def load_admin_dataset_row(connection, dataset_id: UUID) -> dict | None:
+    return connection.execute(
+        """
+        select
+          d.id,
+          d.collection_id,
+          d.slug,
+          d.title,
+          d.summary,
+          d.classification,
+          d.visibility,
+          d.storage_bucket,
+          d.storage_key,
+          d.mime_type,
+          d.file_size_bytes,
+          d.sort_order,
+          d.published_at,
+          coalesce(string_agg(distinct t.tag, ', ' order by t.tag), '') as tags
+        from datasets d
+        left join dataset_tags t on t.dataset_id = d.id
+        where d.id = %(dataset_id)s
+        group by d.id
+        """,
+        {"dataset_id": str(dataset_id)},
+    ).fetchone()
+
+
+def load_dataset_choices(connection) -> list[dict]:
+    return connection.execute(
+        """
+        select d.id, d.title, d.slug, c.title as collection_title
+        from datasets d
+        left join collections c on c.id = d.collection_id
+        order by coalesce(c.title, ''), d.title asc
+        """
+    ).fetchall()
+
+
+def load_collection_choices(connection) -> list[dict]:
+    return connection.execute(
+        """
+        select id, title, slug
+        from collections
+        order by title asc
+        """
+    ).fetchall()
+
+
+def load_admin_token_rows(connection) -> list[dict]:
+    return connection.execute(
+        """
+        select
+          t.id,
+          t.label,
+          t.status,
+          t.expires_at,
+          t.created_at,
+          coalesce(
+            json_agg(
+              json_build_object(
+                'id', g.id,
+                'dataset_id', g.dataset_id,
+                'classification', g.classification,
+                'bucket', g.bucket,
+                'key_prefix', g.key_prefix,
+                'effect', g.effect
+              )
+              order by g.created_at asc
+            ) filter (where g.id is not null),
+            '[]'::json
+          ) as grants
+        from access_tokens t
+        left join token_grants g on g.token_id = t.id
+        group by t.id
+        order by t.created_at desc
+        """
+    ).fetchall()
+
+
+def load_bucket_names(s3_client: BaseClient) -> list[str]:
+    try:
+        buckets = s3_client.list_buckets().get("Buckets", [])
+    except ClientError:
+        return []
+    return sorted(bucket["Name"] for bucket in buckets)
+
+
+def load_readme_options(s3_client: BaseClient) -> list[dict[str, str]]:
+    options: list[dict[str, str]] = []
+    for bucket_name in load_bucket_names(s3_client):
+        paginator = s3_client.get_paginator("list_objects_v2")
+        try:
+            for page in paginator.paginate(Bucket=bucket_name):
+                for obj in page.get("Contents", []):
+                    key = obj["Key"]
+                    if not key.lower().endswith(".pdf"):
+                        continue
+                    options.append(
+                        {
+                            "bucket": bucket_name,
+                            "key": key,
+                            "label": f"{bucket_name} / {key}",
+                        }
+                    )
+        except ClientError:
+            continue
+    return options
+
+
 def token_grants_dataset(dataset: DatasetRecord, grants: list[TokenGrant]) -> bool:
     for grant in grants:
         if grant.dataset_id and grant.dataset_id != dataset.id:
@@ -618,7 +923,40 @@ def build_collection_detail(
     )
 
 
+def admin_context(
+    request: Request,
+    connection,
+    s3_client: BaseClient,
+    *,
+    message: str | None = None,
+    error: str | None = None,
+    plaintext_token: str | None = None,
+    edit_collection: dict | None = None,
+    edit_dataset: dict | None = None,
+    current_section: str = "catalog",
+    selected_collection_id: UUID | None = None,
+) -> dict:
+    return {
+        "request": request,
+        "message": message,
+        "error": error,
+        "plaintext_token": plaintext_token,
+        "current_section": current_section,
+        "tokens": load_admin_token_rows(connection),
+        "collections": load_admin_collection_rows(connection),
+        "datasets": load_admin_dataset_rows(connection, selected_collection_id),
+        "dataset_choices": load_dataset_choices(connection),
+        "collection_choices": load_collection_choices(connection),
+        "bucket_names": load_bucket_names(s3_client),
+        "readme_options": load_readme_options(s3_client),
+        "edit_collection": edit_collection,
+        "edit_dataset": edit_dataset,
+        "selected_collection_id": str(selected_collection_id) if selected_collection_id else "",
+    }
+
+
 app = FastAPI(title="Real Good Research Broker API", version="0.3.0")
+app.mount("/admin/static", StaticFiles(directory=str(APP_DIR / "static")), name="admin-static")
 
 
 @app.get("/healthz")
@@ -735,4 +1073,583 @@ def create_download_url(
         reason=reason,
         download_url=download_url,
         expires_in=expires_in,
+    )
+
+
+@app.get("/admin/login", response_class=HTMLResponse)
+def admin_login_page(request: Request, settings: Settings = Depends(get_settings)):
+    if admin_authenticated(request, settings):
+        return RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
+    return templates.TemplateResponse(
+        request,
+        "admin_login.html",
+        {"error": None},
+    )
+
+
+@app.post("/admin/login", response_class=HTMLResponse)
+async def admin_login_submit(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    form = await request.form()
+    username = str(form.get("username", "")).strip()
+    password = str(form.get("password", ""))
+
+    if (
+        username != settings.admin_username
+        or not hmac.compare_digest(password, settings.admin_password)
+    ):
+        return templates.TemplateResponse(
+            request,
+            "admin_login.html",
+            {"error": "Invalid admin credentials."},
+            status_code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    response = RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
+    set_admin_session_cookie(response, settings)
+    return response
+
+
+@app.post("/admin/logout")
+def admin_logout():
+    response = RedirectResponse(url="/admin/login", status_code=status.HTTP_303_SEE_OTHER)
+    clear_admin_session_cookie(response)
+    return response
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_dashboard(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    if not admin_authenticated(request, settings):
+        return admin_login_redirect()
+    return RedirectResponse(url="/admin/catalog", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/admin/catalog", response_class=HTMLResponse)
+def admin_catalog(
+    request: Request,
+    connection=Depends(get_db_connection),
+    s3_client: BaseClient = Depends(get_s3_client),
+    settings: Settings = Depends(get_settings),
+):
+    if not admin_authenticated(request, settings):
+        return admin_login_redirect()
+
+    selected_collection_id = parse_optional_uuid(
+        request.query_params.get("collection_id")
+    )
+    return templates.TemplateResponse(
+        request,
+        "admin_catalog.html",
+        admin_context(
+            request,
+            connection,
+            s3_client,
+            current_section="catalog",
+            selected_collection_id=selected_collection_id,
+        ),
+    )
+
+
+@app.get("/admin/tokens", response_class=HTMLResponse)
+def admin_tokens_page(
+    request: Request,
+    connection=Depends(get_db_connection),
+    s3_client: BaseClient = Depends(get_s3_client),
+    settings: Settings = Depends(get_settings),
+):
+    if not admin_authenticated(request, settings):
+        return admin_login_redirect()
+
+    return templates.TemplateResponse(
+        request,
+        "admin_tokens.html",
+        admin_context(
+            request,
+            connection,
+            s3_client,
+            current_section="tokens",
+        ),
+    )
+
+
+@app.post("/admin/tokens", response_class=HTMLResponse)
+async def admin_create_token(
+    request: Request,
+    connection=Depends(get_db_connection),
+    s3_client: BaseClient = Depends(get_s3_client),
+    settings: Settings = Depends(get_settings),
+):
+    if not admin_authenticated(request, settings):
+        return admin_login_redirect()
+
+    form = await request.form()
+    label = str(form.get("label", "")).strip()
+    plaintext_token = str(form.get("plaintext_token", "")).strip()
+    expires_at = parse_optional_datetime(str(form.get("expires_at", "")).strip() or None)
+    grant_mode = str(form.get("grant_mode", "bucket")).strip()
+    dataset_id = parse_optional_uuid(str(form.get("dataset_id", "")).strip() or None)
+    classification = str(form.get("classification", "restricted")).strip() or None
+    bucket = str(form.get("bucket", "")).strip() or None
+    key_prefix = str(form.get("key_prefix", "")).strip() or None
+
+    if not label:
+        return templates.TemplateResponse(
+            request,
+            "admin_tokens.html",
+            admin_context(request, connection, s3_client, error="Token label is required.", current_section="tokens"),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    if grant_mode == "bucket" and not bucket:
+        return templates.TemplateResponse(
+            request,
+            "admin_tokens.html",
+            admin_context(request, connection, s3_client, error="Bucket grants require a bucket name.", current_section="tokens"),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    if grant_mode == "dataset" and not dataset_id:
+        return templates.TemplateResponse(
+            request,
+            "admin_tokens.html",
+            admin_context(request, connection, s3_client, error="Dataset grants require a dataset selection.", current_section="tokens"),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    random_suffix = secrets.token_urlsafe(12)
+    if plaintext_token:
+        plaintext_token = f"{plaintext_token}_{random_suffix}"
+    else:
+        plaintext_token = random_suffix
+    token_hash = fingerprint_token(plaintext_token)
+
+    existing_token = connection.execute(
+        """
+        select 1
+        from access_tokens
+        where token_hash = %(token_hash)s
+        """,
+        {"token_hash": token_hash},
+    ).fetchone()
+    if existing_token:
+        return templates.TemplateResponse(
+            request,
+            "admin_tokens.html",
+            admin_context(
+                request,
+                connection,
+                s3_client,
+                error="That generated token already exists. Try again or use a different prefix.",
+                current_section="tokens",
+            ),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        token_row = connection.execute(
+            """
+            insert into access_tokens (token_hash, label, status, expires_at)
+            values (%(token_hash)s, %(label)s, 'active', %(expires_at)s)
+            returning id
+            """,
+            {
+                "token_hash": token_hash,
+                "label": label,
+                "expires_at": expires_at,
+            },
+        ).fetchone()
+
+        if grant_mode == "dataset" and dataset_id:
+            connection.execute(
+                """
+                insert into token_grants (token_id, dataset_id, effect)
+                values (%(token_id)s, %(dataset_id)s, 'allow')
+                """,
+                {"token_id": token_row["id"], "dataset_id": str(dataset_id)},
+            )
+        elif grant_mode == "bucket":
+            connection.execute(
+                """
+                insert into token_grants (token_id, classification, bucket, key_prefix, effect)
+                values (%(token_id)s, %(classification)s, %(bucket)s, %(key_prefix)s, 'allow')
+                """,
+                {
+                    "token_id": token_row["id"],
+                    "classification": classification,
+                    "bucket": bucket,
+                    "key_prefix": key_prefix,
+                },
+            )
+
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+    return templates.TemplateResponse(
+        request,
+        "admin_tokens.html",
+        admin_context(
+            request,
+            connection,
+            s3_client,
+            message="Token created. Copy the plaintext token now; it will not be shown again.",
+            plaintext_token=plaintext_token,
+            current_section="tokens",
+        ),
+    )
+
+
+@app.post("/admin/tokens/{token_id}/revoke")
+def admin_revoke_token(
+    token_id: UUID,
+    request: Request,
+    connection=Depends(get_db_connection),
+    settings: Settings = Depends(get_settings),
+):
+    if not admin_authenticated(request, settings):
+        return admin_login_redirect()
+
+    connection.execute(
+        """
+        update access_tokens
+        set status = 'revoked'
+        where id = %(token_id)s
+        """,
+        {"token_id": str(token_id)},
+    )
+    connection.commit()
+    return RedirectResponse(url="/admin/tokens", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/admin/collections", response_class=HTMLResponse)
+async def admin_create_collection(
+    request: Request,
+    connection=Depends(get_db_connection),
+    s3_client: BaseClient = Depends(get_s3_client),
+    settings: Settings = Depends(get_settings),
+):
+    if not admin_authenticated(request, settings):
+        return admin_login_redirect()
+
+    form = await request.form()
+    title = str(form.get("title", "")).strip()
+    slug = str(form.get("slug", "")).strip()
+    summary = str(form.get("summary", "")).strip() or None
+    readme_bucket, readme_key = parse_readme_selection(
+        str(form.get("readme_object", "")).strip() or None
+    )
+    published_at = parse_optional_datetime(str(form.get("published_at", "")).strip() or None)
+
+    if not title or not slug:
+        return templates.TemplateResponse(
+            request,
+            "admin_catalog.html",
+            admin_context(request, connection, s3_client, error="Collection title and slug are required.", current_section="catalog"),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        connection.execute(
+            """
+            insert into collections (title, slug, summary, readme_bucket, readme_key, published_at)
+            values (%(title)s, %(slug)s, %(summary)s, %(readme_bucket)s, %(readme_key)s, coalesce(%(published_at)s, now()))
+            """,
+            {
+                "title": title,
+                "slug": slug,
+                "summary": summary,
+                "readme_bucket": readme_bucket,
+                "readme_key": readme_key,
+                "published_at": published_at,
+            },
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+    return templates.TemplateResponse(
+        request,
+        "admin_catalog.html",
+        admin_context(request, connection, s3_client, message="Collection created.", current_section="catalog"),
+    )
+
+
+@app.get("/admin/collections/{collection_id}", response_class=HTMLResponse)
+def admin_edit_collection_page(
+    collection_id: UUID,
+    request: Request,
+    connection=Depends(get_db_connection),
+    s3_client: BaseClient = Depends(get_s3_client),
+    settings: Settings = Depends(get_settings),
+):
+    if not admin_authenticated(request, settings):
+        return admin_login_redirect()
+    edit_collection = load_admin_collection_row(connection, collection_id)
+    if not edit_collection:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found.")
+    return templates.TemplateResponse(
+        request,
+        "admin_collection_edit.html",
+        admin_context(request, connection, s3_client, edit_collection=edit_collection),
+        
+    )
+
+
+@app.post("/admin/collections/{collection_id}", response_class=HTMLResponse)
+async def admin_update_collection(
+    collection_id: UUID,
+    request: Request,
+    connection=Depends(get_db_connection),
+    s3_client: BaseClient = Depends(get_s3_client),
+    settings: Settings = Depends(get_settings),
+):
+    if not admin_authenticated(request, settings):
+        return admin_login_redirect()
+
+    form = await request.form()
+    title = str(form.get("title", "")).strip()
+    slug = str(form.get("slug", "")).strip()
+    summary = str(form.get("summary", "")).strip() or None
+    readme_bucket, readme_key = parse_readme_selection(
+        str(form.get("readme_object", "")).strip() or None
+    )
+    published_at = parse_optional_datetime(str(form.get("published_at", "")).strip() or None)
+
+    try:
+        connection.execute(
+            """
+            update collections
+            set
+              title = %(title)s,
+              slug = %(slug)s,
+              summary = %(summary)s,
+              readme_bucket = %(readme_bucket)s,
+              readme_key = %(readme_key)s,
+              published_at = coalesce(%(published_at)s, published_at)
+            where id = %(collection_id)s
+            """,
+            {
+                "collection_id": str(collection_id),
+                "title": title,
+                "slug": slug,
+                "summary": summary,
+                "readme_bucket": readme_bucket,
+                "readme_key": readme_key,
+                "published_at": published_at,
+            },
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+    edit_collection = load_admin_collection_row(connection, collection_id)
+    return templates.TemplateResponse(
+        request,
+        "admin_collection_edit.html",
+        admin_context(
+            request,
+            connection,
+            s3_client,
+            message="Collection updated.",
+            edit_collection=edit_collection,
+            current_section="catalog",
+        ),
+    )
+
+
+@app.post("/admin/datasets", response_class=HTMLResponse)
+async def admin_create_dataset(
+    request: Request,
+    connection=Depends(get_db_connection),
+    s3_client: BaseClient = Depends(get_s3_client),
+    settings: Settings = Depends(get_settings),
+):
+    if not admin_authenticated(request, settings):
+        return admin_login_redirect()
+
+    form = await request.form()
+    title = str(form.get("title", "")).strip()
+    slug = str(form.get("slug", "")).strip()
+    if not title or not slug:
+        return templates.TemplateResponse(
+            request,
+            "admin_catalog.html",
+            admin_context(request, connection, s3_client, error="Dataset title and slug are required.", current_section="catalog"),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    if not str(form.get("storage_bucket", "")).strip() or not str(form.get("storage_key", "")).strip():
+        return templates.TemplateResponse(
+            request,
+            "admin_catalog.html",
+            admin_context(request, connection, s3_client, error="Dataset bucket and object key are required.", current_section="catalog"),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    tags = normalize_tags(str(form.get("tags", "")).strip() or None)
+    collection_id = parse_optional_uuid(str(form.get("collection_id", "")).strip() or None)
+    published_at = parse_optional_datetime(str(form.get("published_at", "")).strip() or None)
+    file_size_bytes = parse_optional_int(str(form.get("file_size_bytes", "")).strip() or None)
+    sort_order = parse_optional_int(str(form.get("sort_order", "")).strip() or None) or 0
+
+    try:
+        row = connection.execute(
+            """
+            insert into datasets (
+              collection_id, slug, title, summary, classification, visibility,
+              storage_bucket, storage_key, mime_type, file_size_bytes, sort_order, published_at
+            )
+            values (
+              %(collection_id)s, %(slug)s, %(title)s, %(summary)s, %(classification)s, %(visibility)s,
+              %(storage_bucket)s, %(storage_key)s, %(mime_type)s, %(file_size_bytes)s, %(sort_order)s,
+              coalesce(%(published_at)s, now())
+            )
+            returning id
+            """,
+            {
+                "collection_id": str(collection_id) if collection_id else None,
+                "slug": slug,
+                "title": title,
+                "summary": str(form.get("summary", "")).strip() or None,
+                "classification": str(form.get("classification", "public")).strip(),
+                "visibility": str(form.get("visibility", "listed")).strip(),
+                "storage_bucket": str(form.get("storage_bucket", "")).strip(),
+                "storage_key": str(form.get("storage_key", "")).strip(),
+                "mime_type": str(form.get("mime_type", "")).strip() or None,
+                "file_size_bytes": file_size_bytes,
+                "sort_order": sort_order,
+                "published_at": published_at,
+            },
+        ).fetchone()
+
+        for tag in tags:
+            connection.execute(
+                """
+                insert into dataset_tags (dataset_id, tag)
+                values (%(dataset_id)s, %(tag)s)
+                on conflict do nothing
+                """,
+                {"dataset_id": str(row["id"]), "tag": tag},
+            )
+
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+    return templates.TemplateResponse(
+        request,
+        "admin_catalog.html",
+        admin_context(request, connection, s3_client, message="Dataset created.", current_section="catalog"),
+    )
+
+
+@app.get("/admin/datasets/{dataset_id}", response_class=HTMLResponse)
+def admin_edit_dataset_page(
+    dataset_id: UUID,
+    request: Request,
+    connection=Depends(get_db_connection),
+    s3_client: BaseClient = Depends(get_s3_client),
+    settings: Settings = Depends(get_settings),
+):
+    if not admin_authenticated(request, settings):
+        return admin_login_redirect()
+    edit_dataset = load_admin_dataset_row(connection, dataset_id)
+    if not edit_dataset:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found.")
+    return templates.TemplateResponse(
+        request,
+        "admin_dataset_edit.html",
+        admin_context(request, connection, s3_client, edit_dataset=edit_dataset),
+    )
+
+
+@app.post("/admin/datasets/{dataset_id}", response_class=HTMLResponse)
+async def admin_update_dataset(
+    dataset_id: UUID,
+    request: Request,
+    connection=Depends(get_db_connection),
+    s3_client: BaseClient = Depends(get_s3_client),
+    settings: Settings = Depends(get_settings),
+):
+    if not admin_authenticated(request, settings):
+        return admin_login_redirect()
+
+    form = await request.form()
+    tags = normalize_tags(str(form.get("tags", "")).strip() or None)
+    collection_id = parse_optional_uuid(str(form.get("collection_id", "")).strip() or None)
+    published_at = parse_optional_datetime(str(form.get("published_at", "")).strip() or None)
+    file_size_bytes = parse_optional_int(str(form.get("file_size_bytes", "")).strip() or None)
+    sort_order = parse_optional_int(str(form.get("sort_order", "")).strip() or None) or 0
+
+    try:
+        connection.execute(
+            """
+            update datasets
+            set
+              collection_id = %(collection_id)s,
+              slug = %(slug)s,
+              title = %(title)s,
+              summary = %(summary)s,
+              classification = %(classification)s,
+              visibility = %(visibility)s,
+              storage_bucket = %(storage_bucket)s,
+              storage_key = %(storage_key)s,
+              mime_type = %(mime_type)s,
+              file_size_bytes = %(file_size_bytes)s,
+              sort_order = %(sort_order)s,
+              published_at = coalesce(%(published_at)s, published_at)
+            where id = %(dataset_id)s
+            """,
+            {
+                "dataset_id": str(dataset_id),
+                "collection_id": str(collection_id) if collection_id else None,
+                "slug": str(form.get("slug", "")).strip(),
+                "title": str(form.get("title", "")).strip(),
+                "summary": str(form.get("summary", "")).strip() or None,
+                "classification": str(form.get("classification", "public")).strip(),
+                "visibility": str(form.get("visibility", "listed")).strip(),
+                "storage_bucket": str(form.get("storage_bucket", "")).strip(),
+                "storage_key": str(form.get("storage_key", "")).strip(),
+                "mime_type": str(form.get("mime_type", "")).strip() or None,
+                "file_size_bytes": file_size_bytes,
+                "sort_order": sort_order,
+                "published_at": published_at,
+            },
+        )
+        connection.execute(
+            "delete from dataset_tags where dataset_id = %(dataset_id)s",
+            {"dataset_id": str(dataset_id)},
+        )
+        for tag in tags:
+            connection.execute(
+                """
+                insert into dataset_tags (dataset_id, tag)
+                values (%(dataset_id)s, %(tag)s)
+                on conflict do nothing
+                """,
+                {"dataset_id": str(dataset_id), "tag": tag},
+            )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+    edit_dataset = load_admin_dataset_row(connection, dataset_id)
+    return templates.TemplateResponse(
+        request,
+        "admin_dataset_edit.html",
+        admin_context(
+            request,
+            connection,
+            s3_client,
+            message="Dataset updated.",
+            edit_dataset=edit_dataset,
+            current_section="catalog",
+        ),
     )

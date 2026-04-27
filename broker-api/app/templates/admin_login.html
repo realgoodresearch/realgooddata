@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin Login</title>
+  <link rel="stylesheet" href="{{ request.url_for('admin-static', path='admin.css') }}">
+</head>
+<body class="admin-login-page">
+  <main class="login-shell">
+    <section class="panel login-panel">
+      <p class="eyebrow">Real Good Data Admin</p>
+      <h1>Sign in</h1>
+      <p class="muted">This panel manages collections, datasets, and partner access tokens.</p>
+      {% if error %}
+      <div class="notice error">{{ error }}</div>
+      {% endif %}
+      <form method="post" action="/admin/login" class="stack">
+        <label>
+          <span>Username</span>
+          <input type="text" name="username" autocomplete="username" required>
+        </label>
+        <label>
+          <span>Password</span>
+          <input type="password" name="password" autocomplete="current-password" required>
+        </label>
+        <button type="submit" class="button-primary">Sign in</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

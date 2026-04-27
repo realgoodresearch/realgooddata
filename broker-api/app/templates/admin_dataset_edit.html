@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Edit Dataset</title>
+  <link rel="stylesheet" href="{{ request.url_for('admin-static', path='admin.css') }}">
+</head>
+<body>
+  <header class="admin-topbar">
+    <div>
+      <p class="eyebrow">Real Good Data Admin</p>
+      <h1>Edit Dataset</h1>
+      <nav class="admin-nav">
+        <a href="/admin/catalog" class="active">Catalog</a>
+        <a href="/admin/tokens">Tokens</a>
+      </nav>
+    </div>
+    <a href="/admin/catalog" class="button-secondary button-link">Back to catalog</a>
+  </header>
+  <main class="admin-layout single-panel">
+    {% if message %}<div class="notice success">{{ message }}</div>{% endif %}
+    {% if error %}<div class="notice error">{{ error }}</div>{% endif %}
+    <section class="panel">
+      <form method="post" action="/admin/datasets/{{ edit_dataset.id }}" class="form-grid form-stack">
+        <label>
+          <span>Collection</span>
+          <select name="collection_id">
+            <option value="">None</option>
+            {% for collection in collection_choices %}
+            <option value="{{ collection.id }}" {% if edit_dataset.collection_id == collection.id %}selected{% endif %}>{{ collection.title }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <br>
+        <label>
+          <span>Title</span>
+          <input type="text" name="title" value="{{ edit_dataset.title }}" required>
+        </label>
+        <br>
+        <label>
+          <span>Slug</span>
+          <input type="text" name="slug" value="{{ edit_dataset.slug }}" required>
+        </label>
+        <br>
+        <label>
+          <span>Classification</span>
+          <select name="classification">
+            {% for option in ['public', 'restricted', 'confidential'] %}
+            <option value="{{ option }}" {% if edit_dataset.classification == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <br>
+        <label>
+          <span>Visibility</span>
+          <select name="visibility">
+            {% for option in ['listed', 'hidden'] %}
+            <option value="{{ option }}" {% if edit_dataset.visibility == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <br>
+        <label>
+          <span>Bucket</span>
+          <input type="text" name="storage_bucket" list="bucket-options" value="{{ edit_dataset.storage_bucket }}" required>
+        </label>
+        <br>
+        <label class="full">
+          <span>Object key</span>
+          <input type="text" name="storage_key" value="{{ edit_dataset.storage_key }}" required>
+        </label>
+        <br>
+        <label class="full">
+          <span>Summary</span>
+          <textarea name="summary" rows="4">{{ edit_dataset.summary or '' }}</textarea>
+        </label>
+        <br>
+        <label>
+          <span>Sort order</span>
+          <input type="number" name="sort_order" value="{{ edit_dataset.sort_order or 0 }}">
+        </label>
+        <br>
+        <label>
+          <span>Published at</span>
+          <input type="datetime-local" name="published_at" value="{{ edit_dataset.published_at.strftime('%Y-%m-%dT%H:%M') if edit_dataset.published_at else '' }}">
+        </label>
+        <br>
+        <label>
+          <span>File size bytes</span>
+          <input type="number" name="file_size_bytes" min="0" value="{{ edit_dataset.file_size_bytes or '' }}">
+        </label>
+        <br>
+        <label>
+          <span>MIME type</span>
+          <input type="text" name="mime_type" value="{{ edit_dataset.mime_type or '' }}">
+        </label>
+        <br>
+        <label class="full">
+          <span>Tags</span>
+          <input type="text" name="tags" value="{{ edit_dataset.tags or '' }}">
+        </label>
+        <br>
+        <div class="full actions">
+          <button type="submit" class="button-primary">Save dataset</button>
+        </div>
+      </form>
+      <datalist id="bucket-options">
+        {% for bucket_name in bucket_names %}
+        <option value="{{ bucket_name }}"></option>
+        {% endfor %}
+      </datalist>
+    </section>
+  </main>
+</body>
+</html>
