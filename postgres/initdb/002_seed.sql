@@ -1,5 +1,26 @@
+insert into collections (
+    id,
+    slug,
+    title,
+    summary,
+    readme_bucket,
+    readme_key,
+    published_at
+) values
+    (
+        '99999999-9999-9999-9999-999999999991',
+        'gaza-nowpop-apr-2026',
+        'Gaza NowPop, April 2026',
+        'April 2026 release package for Gaza population estimates, partner files, and supporting notes.',
+        'public',
+        'gaza/readmes/gaza-nowpop-apr-2026-readme.pdf',
+        '2026-04-01T00:00:00Z'
+    )
+on conflict (id) do nothing;
+
 insert into datasets (
     id,
+    collection_id,
     slug,
     title,
     summary,
@@ -8,10 +29,12 @@ insert into datasets (
     storage_bucket,
     storage_key,
     mime_type,
+    sort_order,
     published_at
 ) values
     (
         '11111111-1111-1111-1111-111111111111',
+        '99999999-9999-9999-9999-999999999991',
         'gaza-population-estimates-apr-2026',
         'Gaza Population Estimates, April 2026',
         'Public governorate-level population estimates for operational planning.',
@@ -20,10 +43,12 @@ insert into datasets (
         'public',
         'gaza/population-estimates-apr-2026.csv',
         'text/csv',
+        10,
         '2026-04-01T00:00:00Z'
     ),
     (
         '22222222-2222-2222-2222-222222222222',
+        '99999999-9999-9999-9999-999999999991',
         'gaza-partner-briefing-alpha-apr-2026',
         'Gaza Partner Briefing Alpha, April 2026',
         'Restricted partner release with additional breakdowns.',
@@ -32,10 +57,12 @@ insert into datasets (
         'gazanowpop',
         'restricted/partner-alpha/briefing-apr-2026.xlsx',
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        20,
         '2026-04-02T00:00:00Z'
     ),
     (
         '33333333-3333-3333-3333-333333333333',
+        '99999999-9999-9999-9999-999999999991',
         'gaza-method-notes-confidential-apr-2026',
         'Gaza Method Notes, Confidential, April 2026',
         'Confidential reference notes listed for transparency but never downloadable.',
@@ -44,6 +71,7 @@ insert into datasets (
         'gazanowpop',
         'strictly-confidential/method-notes-apr-2026.pdf',
         'application/pdf',
+        30,
         '2026-04-03T00:00:00Z'
     )
 on conflict (id) do nothing;

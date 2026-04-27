@@ -2,31 +2,30 @@ const storageKey = "rrg-data-portal-token";
 const state = {
   items: [],
   token: localStorage.getItem(storageKey) || "",
-  filters: {
-    query: "",
-    classification: "all",
-    access: "all"
-  }
+  query: ""
 };
 
-const tokenInput = document.getElementById("token-input");
-const tokenStatus = document.getElementById("token-status");
-const catalogueNode = document.getElementById("catalogue");
 const searchInput = document.getElementById("search-input");
-const classificationFilter = document.getElementById("classification-filter");
-const accessFilter = document.getElementById("access-filter");
+const collectionList = document.getElementById("collection-list");
+const tokenInput = document.getElementById("token-input");
 const tokenTrigger = document.getElementById("token-trigger");
 const tokenModal = document.getElementById("token-modal");
 const tokenModalClose = document.getElementById("token-modal-close");
-
-const metricTotal = document.getElementById("count-total");
-const metricDownloadable = document.getElementById("count-downloadable");
-const metricLocked = document.getElementById("count-locked");
+const lockedIcon = `
+  <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+    <path d="M5.5 6V4.75a2.5 2.5 0 0 1 5 0V6h.75A1.75 1.75 0 0 1 13 7.75v5.5A1.75 1.75 0 0 1 11.25 15h-6.5A1.75 1.75 0 0 1 3 13.25v-5.5A1.75 1.75 0 0 1 4.75 6zm1 0h3V4.75a1.5 1.5 0 0 0-3 0z"/>
+  </svg>
+`;
+const unlockedIcon = `
+  <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+    <path d="M11 6V4.75a3 3 0 1 0-6 0 .75.75 0 0 1-1.5 0 4.5 4.5 0 1 1 9 0V6h.25A1.75 1.75 0 0 1 14.5 7.75v5.5A1.75 1.75 0 0 1 12.75 15h-7.5A1.75 1.75 0 0 1 3.5 13.25v-5.5A1.75 1.75 0 0 1 5.25 6zm-5.75 1.5a.25.25 0 0 0-.25.25v5.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-5.5a.25.25 0 0 0-.25-.25z"/>
+  </svg>
+`;
 
 if (tokenInput) {
   tokenInput.value = state.token;
 }
-syncTokenStatus();
+syncTokenTrigger();
 
 document.getElementById("apply-token")?.addEventListener("click", () => {
   state.token = tokenInput.value.trim();
@@ -35,28 +34,24 @@ document.getElementById("apply-token")?.addEventListener("click", () => {
   } else {
     localStorage.removeItem(storageKey);
   }
-  syncTokenStatus();
+  syncTokenTrigger();
   closeTokenModal();
-  fetchCatalogue();
+  fetchCollections();
 });
 
 document.getElementById("clear-token")?.addEventListener("click", () => {
   state.token = "";
-  tokenInput.value = "";
+  if (tokenInput) {
+    tokenInput.value = "";
+  }
   localStorage.removeItem(storageKey);
-  syncTokenStatus();
+  syncTokenTrigger();
   closeTokenModal();
-  fetchCatalogue();
+  fetchCollections();
 });
 
-tokenTrigger?.addEventListener("click", () => {
-  openTokenModal();
-});
-
-tokenModalClose?.addEventListener("click", () => {
-  closeTokenModal();
-});
-
+tokenTrigger?.addEventListener("click", openTokenModal);
+tokenModalClose?.addEventListener("click", closeTokenModal);
 tokenModal?.addEventListener("click", (event) => {
   if (event.target instanceof HTMLElement && event.target.dataset.closeModal === "true") {
     closeTokenModal();
@@ -70,77 +65,96 @@ document.addEventListener("keydown", (event) => {
 });
 
 searchInput?.addEventListener("input", (event) => {
-  state.filters.query = event.target.value.toLowerCase().trim();
+  state.query = event.target.value.toLowerCase().trim();
   render();
 });
 
-classificationFilter?.addEventListener("change", (event) => {
-  state.filters.classification = event.target.value;
-  render();
-});
-
-accessFilter?.addEventListener("change", (event) => {
-  state.filters.access = event.target.value;
-  render();
-});
-
-async function fetchCatalogue() {
+async function fetchCollections() {
   const headers = {};
   if (state.token) {
     headers["X-Access-Token"] = state.token;
   }
 
   try {
-    const response = await fetch("/api/v1/catalog", { headers });
+    const response = await fetch("/api/v1/collections", { headers });
     const payload = await response.json().catch(() => ({}));
-
     if (!response.ok) {
-      throw new Error(payload.detail || "Failed to load catalogue.");
+      throw new Error(payload.detail || "Failed to load collections.");
     }
-
     state.items = Array.isArray(payload.items) ? payload.items : [];
+    clearStatus();
     render();
   } catch (error) {
     state.items = [];
     render();
-    showStatus(error.message || "Failed to load catalogue.", true);
+    showStatus(error.message || "Failed to load collections.", true);
   }
 }
 
-function showStatus(message, isError = false) {
-  let statusNode = document.getElementById("status");
-  if (!statusNode) {
-    statusNode = document.createElement("section");
-    statusNode.id = "status";
-    statusNode.setAttribute("aria-live", "polite");
-    const shell = document.querySelector(".catalogue-shell");
-    const catalogue = document.getElementById("catalogue");
-    if (shell && catalogue) {
-      shell.insertBefore(statusNode, catalogue);
-    } else if (catalogue && catalogue.parentNode) {
-      catalogue.parentNode.insertBefore(statusNode, catalogue);
-    } else {
-      return;
-    }
-  }
-  statusNode.textContent = message;
-  statusNode.className = isError ? "status-card error" : "status-card";
-}
-
-function clearStatus() {
-  const statusNode = document.getElementById("status");
-  if (statusNode) {
-    statusNode.remove();
-  }
-}
-
-function syncTokenStatus() {
-  if (!tokenStatus) {
+function render() {
+  if (!collectionList) {
     return;
   }
-  tokenStatus.textContent = state.token
-    ? "Token saved in this browser and applied to catalogue requests."
-    : "No token is currently applied.";
+
+  const visibleItems = state.items.filter((item) => {
+    if (!state.query) {
+      return true;
+    }
+    const haystack = [
+      item.title,
+      item.summary || "",
+      item.slug,
+      item.search_text || ""
+    ]
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(state.query);
+  });
+
+  if (visibleItems.length === 0) {
+    collectionList.innerHTML = '<div class="empty-state">No collections match the current search.</div>';
+    return;
+  }
+
+  collectionList.innerHTML = "";
+  for (const item of visibleItems) {
+    collectionList.appendChild(renderCollectionCard(item));
+  }
+}
+
+function renderCollectionCard(item) {
+  const card = document.createElement("a");
+  card.className = "collection-card";
+  card.href = `collection.html?slug=${encodeURIComponent(item.slug)}`;
+
+  const published = item.published_at
+    ? new Date(item.published_at).toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric"
+    })
+    : "Unpublished";
+
+  card.innerHTML = `
+    <div class="collection-card-top">
+      <div>
+        <h2>${escapeHtml(item.title)}</h2>
+        <div class="slug">${escapeHtml(item.slug)}</div>
+      </div>
+    </div>
+    <p class="summary">${escapeHtml(item.summary || "No summary provided.")}</p>
+    <div class="meta">
+      <span>${escapeHtml(published)}</span>
+      <span>${item.counts.total} files</span>
+    </div>
+    <div class="count-list">
+      <span class="count-pill public">${item.counts.public} public</span>
+      <span class="count-pill restricted">${item.counts.restricted} restricted</span>
+      <span class="count-pill confidential">${item.counts.confidential} confidential</span>
+    </div>
+  `;
+
+  return card;
 }
 
 function openTokenModal() {
@@ -152,6 +166,27 @@ function openTokenModal() {
   window.setTimeout(() => tokenInput?.focus(), 0);
 }
 
+function syncTokenTrigger() {
+  if (!tokenTrigger) {
+    return;
+  }
+  const unlocked = Boolean(state.token);
+  tokenTrigger.innerHTML = unlocked ? unlockedIcon : lockedIcon;
+  tokenTrigger.classList.toggle("is-unlocked", unlocked);
+  tokenTrigger.setAttribute(
+    "aria-label",
+    unlocked
+      ? "Access token is applied. Click to change or clear it."
+      : "Provide access token to unlock restricted data."
+  );
+  tokenTrigger.setAttribute(
+    "title",
+    unlocked
+      ? "Access token is applied. Click to change or clear it."
+      : "Provide access token to unlock restricted data."
+  );
+}
+
 function closeTokenModal() {
   if (!tokenModal) {
     return;
@@ -160,175 +195,26 @@ function closeTokenModal() {
   tokenModal.setAttribute("aria-hidden", "true");
 }
 
-function render() {
-  const visibleItems = state.items.filter(matchesFilters);
-  clearStatus();
-  if (metricTotal) {
-    metricTotal.textContent = String(state.items.length);
-  }
-  if (metricDownloadable) {
-    metricDownloadable.textContent = String(state.items.filter((item) => item.downloadable).length);
-  }
-  if (metricLocked) {
-    metricLocked.textContent = String(state.items.filter((item) => !item.downloadable).length);
-  }
-
-  if (!catalogueNode) {
-    return;
-  }
-
-  if (visibleItems.length === 0) {
-    catalogueNode.innerHTML = '<div class="empty-state">No datasets match the current filters.</div>';
-    return;
-  }
-
-  catalogueNode.innerHTML = "";
-  for (const item of visibleItems) {
-    catalogueNode.appendChild(renderCard(item));
-  }
-}
-
-function matchesFilters(item) {
-  if (state.filters.classification !== "all" && item.classification !== state.filters.classification) {
-    return false;
-  }
-
-  if (state.filters.access === "downloadable" && !item.downloadable) {
-    return false;
-  }
-
-  if (state.filters.access === "locked" && item.downloadable) {
-    return false;
-  }
-
-  if (!state.filters.query) {
-    return true;
-  }
-
-  const haystack = [
-    item.title,
-    item.summary || "",
-    item.slug,
-    ...(item.tags || [])
-  ].join(" ").toLowerCase();
-
-  return haystack.includes(state.filters.query);
-}
-
-function renderCard(item) {
-  const card = document.createElement("article");
-  card.className = "dataset-card";
-
-  const published = item.published_at
-    ? new Date(item.published_at).toLocaleDateString(undefined, {
-        year: "numeric",
-        month: "short",
-        day: "numeric"
-      })
-    : "Unpublished";
-
-  const sizeText = typeof item.file_size_bytes === "number"
-    ? formatBytes(item.file_size_bytes)
-    : "Size unavailable";
-
-  const accessMessage = {
-    public: "Available for immediate download.",
-    token_granted: "Your current token allows this download.",
-    token_required: "Listed here, but requires a valid token to download.",
-    confidential_no_download: "Listed for awareness only. Download is disabled."
-  }[item.access_reason] || "Access state unavailable.";
-
-  const tagMarkup = (item.tags || [])
-    .map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`)
-    .join("");
-
-  card.innerHTML = `
-    <div class="dataset-top">
-      <div>
-        <h3>${escapeHtml(item.title)}</h3>
-        <div class="slug">${escapeHtml(item.slug)}</div>
-      </div>
-      <span class="badge ${item.classification}">${escapeHtml(item.classification)}</span>
-    </div>
-    <p class="summary">${escapeHtml(item.summary || "No summary provided.")}</p>
-    <div class="meta">
-      <span>${escapeHtml(published)}</span>
-      <span>${escapeHtml(sizeText)}</span>
-      <span>${escapeHtml(item.mime_type || "Unknown format")}</span>
-    </div>
-    <div class="tag-row">${tagMarkup}</div>
-    <div class="dataset-footer">
-      <div class="access-note">${escapeHtml(accessMessage)}</div>
-      <button class="button-primary download-button" type="button"${item.downloadable ? "" : " disabled"}>
-        Download
-      </button>
-    </div>
-  `;
-
-  const button = card.querySelector(".download-button");
-  if (item.downloadable) {
-    button.addEventListener("click", () => handleDownload(item, button));
-  }
-
-  return card;
-}
-
-async function handleDownload(item, button) {
-  button.disabled = true;
-  const originalLabel = button.textContent;
-  button.textContent = "Preparing…";
-
-  const headers = {
-    "Content-Type": "application/json"
-  };
-
-  if (state.token) {
-    headers["X-Access-Token"] = state.token;
-  }
-
-  try {
-    const response = await fetch("/api/v1/download-url", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        dataset_id: item.id
-      })
-    });
-    const payload = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      throw new Error(payload.detail || "Download request failed.");
-    }
-
-    if (!payload.allowed || !payload.download_url) {
-      throw new Error("This dataset is currently not downloadable.");
-    }
-
-    window.location.href = payload.download_url;
-    clearStatus();
-  } catch (error) {
-    showStatus(error.message || "Download request failed.", true);
-  } finally {
-    button.disabled = false;
-    button.textContent = originalLabel;
-  }
-}
-
-function formatBytes(bytes) {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unit = units[0];
-  for (const nextUnit of units) {
-    value /= 1024;
-    unit = nextUnit;
-    if (value < 1024) {
-      break;
+function showStatus(message, isError = false) {
+  let statusNode = document.getElementById("status");
+  if (!statusNode) {
+    statusNode = document.createElement("section");
+    statusNode.id = "status";
+    statusNode.setAttribute("aria-live", "polite");
+    const shell = document.querySelector(".catalogue-shell");
+    const list = document.getElementById("collection-list");
+    if (shell && list) {
+      shell.insertBefore(statusNode, list);
+    } else {
+      return;
     }
   }
-  return `${value.toFixed(value >= 10 ? 0 : 1)} ${unit}`;
+  statusNode.textContent = message;
+  statusNode.className = isError ? "status-card error" : "status-card";
+}
+
+function clearStatus() {
+  document.getElementById("status")?.remove();
 }
 
 function escapeHtml(value) {
@@ -340,4 +226,4 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
-fetchCatalogue();
+fetchCollections();

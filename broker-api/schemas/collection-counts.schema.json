@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://data.realgoodresearch.com/schemas/collection-counts.schema.json",
+  "type": "object",
+  "required": [
+    "total",
+    "public",
+    "restricted",
+    "confidential",
+    "downloadable",
+    "locked"
+  ],
+  "properties": {
+    "total": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "public": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "restricted": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "confidential": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "downloadable": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "locked": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}

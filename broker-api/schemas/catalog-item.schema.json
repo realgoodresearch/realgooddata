@@ -4,7 +4,9 @@
   "type": "object",
   "required": [
     "id",
+    "collection_id",
     "slug",
+    "filename",
     "title",
     "classification",
     "listed",
@@ -17,7 +19,17 @@
       "type": "string",
       "format": "uuid"
     },
+    "collection_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
     "slug": {
+      "type": "string"
+    },
+    "filename": {
       "type": "string"
     },
     "title": {

@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://data.realgoodresearch.com/schemas/collection-detail.schema.json",
+  "type": "object",
+  "required": [
+    "id",
+    "slug",
+    "title",
+    "counts",
+    "datasets"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "slug": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "summary": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "published_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "readme_url": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uri"
+    },
+    "readme_filename": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "counts": {
+      "$ref": "./collection-counts.schema.json"
+    },
+    "datasets": {
+      "type": "array",
+      "items": {
+        "$ref": "./catalog-item.schema.json"
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -95,8 +95,8 @@ Recommended order for a new subdomain:
 
 ## Catalog Model
 
-Postgres now stores dataset records, tags, access tokens, and token grants. The
-broker treats MinIO bucket layout as an implementation detail.
+Postgres now stores collections, dataset records, tags, access tokens, and token
+grants. The broker treats MinIO bucket layout as an implementation detail.
 
 Classification rules:
 
@@ -104,8 +104,19 @@ Classification rules:
 - `restricted`: listed for everyone, downloadable only with a token grant
 - `confidential`: listed for everyone, never downloadable via the public API
 
+Token grant rules:
+
+- Each `token_grants` row is evaluated conjunctively.
+- If a row specifies both `bucket` and `classification`, both must match.
+- If a row specifies `bucket`, `classification`, and `key_prefix`, all three must match.
+- `dataset_id` can still be used for one-off exact dataset grants.
+
+Collections are editorial containers only. Classification stays on each dataset,
+so a single collection can mix public, restricted, and confidential files.
+
 The database bootstrap files live in [postgres/initdb](/home/doug/git/realgoodresearch/sysadmin/data-portal/postgres/initdb:1). On a fresh Postgres data directory they create:
 
+- `collections`
 - `datasets`
 - `dataset_tags`
 - `access_tokens`
@@ -117,41 +128,36 @@ Dataset timestamps:
 - `updated_at`: auto-updated on each row change
 - `published_at`: now defaults to insert time unless you set it explicitly
 
-If your Postgres data directory already existed before this schema change, run this
-once against the live database:
+If your Postgres data directory already existed before the collection changes,
+run [postgres/migrations/001_add_collections.sql](/home/doug/git/realgoodresearch/sysadmin/data-portal/postgres/migrations/001_add_collections.sql:1)
+once against the live database.
 
-```sql
-alter table datasets
-  alter column published_at set default now();
-
-update datasets
-set published_at = coalesce(published_at, created_at, now())
-where published_at is null;
-
-alter table datasets
-  alter column published_at set not null;
-```
-
-The seed file inserts three example datasets and two example tokens. Sample plaintext
-tokens for a fresh database:
+The seed file inserts one example collection, three example datasets, and two
+example tokens. Sample plaintext tokens for a fresh database:
 
 - `partner-alpha-2026-rotate-me`
 - `partner-beta-2026-rotate-me`
 
 ## API
 
-`GET /api/v1/catalog`
+`GET /api/v1/collections`
 
 - No token required
 - Optional `X-Access-Token` header
-- Returns one unified list of public, restricted, and confidential datasets
+- Returns one list of collection summaries with counts for public, restricted,
+  and confidential files
 
 Example:
 
 ```bash
-curl https://data.realgoodresearch.com/api/v1/catalog \
+curl https://data.realgoodresearch.com/api/v1/collections \
   -k
 ```
+
+`GET /api/v1/collections/{slug}`
+
+- Returns one collection with its README URL and the current access state of each
+  dataset inside it
 
 `GET /api/v1/datasets/{slug}`
 
@@ -175,7 +181,7 @@ curl -X POST https://data.realgoodresearch.com/api/v1/download-url \
   }'
 ```
 
-JSON Schemas for the catalog and download endpoints live in
+JSON Schemas for the collection, catalog, and download endpoints live in
 [broker-api/schemas](/home/doug/git/realgoodresearch/sysadmin/data-portal/broker-api/schemas:1).
 
 ## Quarto Frontend
@@ -187,8 +193,10 @@ not need to be committed. The Quarto source of truth lives under
 The hand-served files in `frontend/` are produced by the Quarto-built site
 defined under [site](/home/doug/git/realgoodresearch/sysadmin/data-portal/site:1).
 The Quarto source mirrors the typography and navigation style used in the main
-Real Good Research docs site, while the browser-side catalog logic stays in
-`site/assets/catalog.js`.
+Real Good Research docs site, while the browser-side collection logic stays in:
+
+- `site/assets/catalog.js` for the collection search page
+- `site/assets/collection-detail.js` for the collection detail page
 
 The Quarto project is configured to render directly into `frontend/`:
 

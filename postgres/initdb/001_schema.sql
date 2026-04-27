@@ -1,7 +1,23 @@
 create extension if not exists pgcrypto;
 
+create table if not exists collections (
+    id uuid primary key default gen_random_uuid(),
+    slug text unique not null,
+    title text not null,
+    summary text,
+    readme_bucket text,
+    readme_key text,
+    published_at timestamptz not null default now(),
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create index if not exists collections_listing_idx
+    on collections (published_at desc, title asc);
+
 create table if not exists datasets (
     id uuid primary key default gen_random_uuid(),
+    collection_id uuid references collections(id) on delete set null,
     slug text unique not null,
     title text not null,
     summary text,
@@ -13,6 +29,7 @@ create table if not exists datasets (
     mime_type text,
     file_size_bytes bigint,
     checksum_sha256 text,
+    sort_order integer not null default 0,
     published_at timestamptz not null default now(),
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
@@ -23,6 +40,9 @@ create unique index if not exists datasets_storage_idx
 
 create index if not exists datasets_listing_idx
     on datasets (visibility, classification, published_at desc);
+
+create index if not exists datasets_collection_idx
+    on datasets (collection_id, sort_order, published_at desc, title asc);
 
 create table if not exists dataset_tags (
     dataset_id uuid not null references datasets(id) on delete cascade,
@@ -75,4 +95,9 @@ $$ language plpgsql;
 drop trigger if exists datasets_set_updated_at on datasets;
 create trigger datasets_set_updated_at
 before update on datasets
+for each row execute function set_updated_at();
+
+drop trigger if exists collections_set_updated_at on collections;
+create trigger collections_set_updated_at
+before update on collections
 for each row execute function set_updated_at();

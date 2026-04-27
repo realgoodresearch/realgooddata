@@ -1,29 +1,13 @@
 ---
-title: "Real Good Data"
-subtitle: "Sharing our data so you can do good things with them."
+title: "Collection"
 title-block: false
 ---
 
 ```{=html}
-<div class="catalogue-shell">
+<div class="catalogue-shell collection-shell">
+  <p><a class="back-link" href="index.html">← Back to all collections</a></p>
 
-  <section class="toolbar" aria-label="Collection search">
-    <div class="toolbar-group search">
-      <div class="search-row">
-        <input id="search-input" type="text" placeholder="Search for the data you need...">
-        <button
-          id="token-trigger"
-          class="token-trigger button-secondary"
-          type="button"
-          aria-label="Provide access token to unlock restricted data."
-          title="Provide access token to unlock restricted data.">
-          <span aria-hidden="true">🔒</span>
-        </button>
-      </div>
-    </div>
-  </section>
-
-  <section id="collection-list" class="collection-grid" aria-live="polite"></section>
+  <section id="collection-detail" class="collection-layout" aria-live="polite"></section>
 </div>
 
 <div id="token-modal" class="token-modal hidden" aria-hidden="true">
@@ -35,7 +19,7 @@ title-block: false
         <span aria-hidden="true">×</span>
       </button>
     </div>
-    <p class="sidebar-copy">Provide access token to unlock restricted data.</p>
+    <p class="sidebar-copy">Provide access token to unlock restricted data inside this collection.</p>
     <div class="token-panel modal-token-panel">
       <label class="field-label" for="token-input">Access token</label>
       <input id="token-input" type="password" placeholder="Paste token here">
@@ -48,4 +32,4 @@ title-block: false
 </div>
 ```
 
-<script src="assets/catalog.js"></script>
+<script src="assets/collection-detail.js"></script>
