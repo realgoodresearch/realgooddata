@@ -1,3 +1,6 @@
+-- Demo-only seed data for local testing and first-run validation.
+-- Do not reuse these UUIDs, token hashes, object keys, or example labels in production.
+
 insert into collections (
     id,
     slug,

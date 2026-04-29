@@ -3,6 +3,10 @@
 This directory contains a draft self-hosted data distribution portal for
 `data.realgoodresearch.com`.
 
+This repository is deployment-specific as written. Before reusing it for another
+organization or public demo, replace the example domain names, network ranges,
+and sample credentials references with values appropriate for that environment.
+
 ## Services
 
 - `minio`: Private S3-compatible object storage
@@ -181,7 +185,8 @@ Schema policy:
 If `postgres/migrations/` is currently empty, that is fine. Add new migration files there only for future post-launch schema changes.
 
 The seed file inserts one example collection, four example datasets, and two
-example tokens. Sample plaintext tokens for a fresh database:
+example tokens for local testing only. These plaintext token values are public
+demo fixtures and must never be used for any real deployment:
 
 - `partner-alpha-2026-rotate-me`
 - `partner-beta-2026-rotate-me`
