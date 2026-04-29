@@ -21,12 +21,28 @@ if [ -z "${LETSENCRYPT_EMAIL}" ]; then
 fi
 
 DOMAIN_ARGS=""
+PRIMARY_DOMAIN=""
 for domain in "$@"; do
+  if [ -z "${PRIMARY_DOMAIN}" ]; then
+    PRIMARY_DOMAIN="${domain}"
+  fi
   DOMAIN_ARGS="${DOMAIN_ARGS} -d ${domain}"
 done
 
 cd "${PROJECT_DIR}"
-docker compose run --rm certbot certonly \
+
+LIVE_DIR="${PROJECT_DIR}/certbot/conf/live/${PRIMARY_DOMAIN}"
+ARCHIVE_DIR="${PROJECT_DIR}/certbot/conf/archive/${PRIMARY_DOMAIN}"
+RENEWAL_CONF="${PROJECT_DIR}/certbot/conf/renewal/${PRIMARY_DOMAIN}.conf"
+
+# If nginx created a temporary self-signed cert, clear that placeholder state
+# so certbot can issue the real certificate.
+if [ -d "${LIVE_DIR}" ] && [ ! -s "${RENEWAL_CONF}" ]; then
+  rm -rf "${LIVE_DIR}" "${ARCHIVE_DIR}"
+  rm -f "${RENEWAL_CONF}"
+fi
+
+docker compose run --rm --entrypoint certbot certbot certonly \
   --webroot \
   -w /var/www/certbot \
   --email "${LETSENCRYPT_EMAIL}" \
