@@ -18,7 +18,7 @@ This directory contains a draft self-hosted data distribution portal for
    Set `MINIO_DATA_PATH` to the host path where MinIO should store data, ideally
    your RAID-backed mount such as `/data/raid/minio`.
    Also set Postgres credentials, `POSTGRES_DATA_PATH`, `POSTGRES_BIND_ADDRESS`,
-   `MINIO_BIND_ADDRESS`, and `MINIO_PUBLIC_ENDPOINT`.
+   and `MINIO_BIND_ADDRESS`.
 2. Start the stack:
 
 ```bash
@@ -76,7 +76,6 @@ The first admin release supports:
 - collection create/edit
 - dataset create/edit
 - bulk import from a MinIO bucket/prefix into a collection
-- README selection from existing MinIO PDF objects
 
 Bulk import behavior:
 
@@ -98,15 +97,10 @@ MINIO_DATA_PATH=/data/raid/minio
 MINIO_BIND_ADDRESS=10.8.0.5
 MINIO_API_PORT=9000
 MINIO_CONSOLE_PORT=9001
-MINIO_PUBLIC_ENDPOINT=https://data.realgoodresearch.com/minio
 POSTGRES_DATA_PATH=/data/raid/postgres
 POSTGRES_BIND_ADDRESS=10.8.0.5
 POSTGRES_PORT=5432
 ```
-
-`MINIO_PUBLIC_ENDPOINT` is the public base URL used when the broker generates
-presigned URLs. The Nginx config proxies `/minio/` to the internal MinIO S3
-service so external clients can use those URLs.
 
 `MINIO_BIND_ADDRESS` controls which host interface exposes the MinIO S3 API and
 console. Set it to a VPN or LAN IP if you want to use the MinIO web console
@@ -160,9 +154,10 @@ Token grant rules:
 Collections are editorial containers only. Classification stays on each dataset,
 so a single collection can mix public, restricted, and confidential files.
 
-The database bootstrap files live in [postgres/initdb](/home/doug/git/realgoodresearch/sysadmin/data-portal/postgres/initdb:1). On a fresh Postgres data directory they create:
+The database bootstrap files live in [postgres/initdb](/home/doug/git/realgoodresearch/sysadmin/data-portal/postgres/initdb:1). On a fresh Postgres data directory they already include the current schema, including collection tags and dataset roles (`data`, `documentation`, `visuals`). A clean initialization creates:
 
 - `collections`
+- `collection_tags`
 - `datasets`
 - `dataset_tags`
 - `access_tokens`
@@ -174,15 +169,68 @@ Dataset timestamps:
 - `updated_at`: auto-updated on each row change
 - `published_at`: now defaults to insert time unless you set it explicitly
 
-If your Postgres data directory already existed before the collection changes,
-run [postgres/migrations/001_add_collections.sql](/home/doug/git/realgoodresearch/sysadmin/data-portal/postgres/migrations/001_add_collections.sql:1)
-once against the live database.
+Schema policy:
 
-The seed file inserts one example collection, three example datasets, and two
+- [postgres/initdb](/home/doug/git/realgoodresearch/sysadmin/data-portal/postgres/initdb:1) is the canonical baseline for fresh databases.
+- Before go-live, it is acceptable to rebuild the Postgres data directory and rely on `initdb/`.
+- After go-live, every schema change should ship in two places:
+  - a new forward-only SQL file under `postgres/migrations/`
+  - the updated canonical schema in `postgres/initdb/001_schema.sql`
+- Fresh installs should initialize from `initdb/`. Existing live databases should apply only the migration files created after they were initialized.
+
+If `postgres/migrations/` is currently empty, that is fine. Add new migration files there only for future post-launch schema changes.
+
+The seed file inserts one example collection, four example datasets, and two
 example tokens. Sample plaintext tokens for a fresh database:
 
 - `partner-alpha-2026-rotate-me`
 - `partner-beta-2026-rotate-me`
+
+## Rebuild Postgres From Scratch
+
+If you have not loaded real data yet, the cleanest way to pick up the latest schema is to rebuild the Postgres data directory from scratch.
+
+1. Stop the Postgres service:
+
+```bash
+docker compose stop postgres
+```
+
+2. Remove the existing Postgres container:
+
+```bash
+docker compose rm -f postgres
+```
+
+3. Delete the contents of the host directory referenced by `POSTGRES_DATA_PATH` in your `.env`.
+
+Example pattern:
+
+```bash
+rm -rf /path/from/POSTGRES_DATA_PATH/*
+```
+
+Only do this if you are sure the database contains no real data you need to keep.
+
+4. Start Postgres again:
+
+```bash
+docker compose up -d postgres
+```
+
+5. Confirm initialization succeeded:
+
+```bash
+docker compose logs postgres
+```
+
+On first startup, Postgres should run the SQL files in `postgres/initdb/`.
+
+6. Rebuild the broker after the database is back:
+
+```bash
+docker compose up -d --build broker-api
+```
 
 ## API
 

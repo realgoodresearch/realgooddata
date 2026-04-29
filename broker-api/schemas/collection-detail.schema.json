@@ -6,6 +6,7 @@
     "id",
     "slug",
     "title",
+    "tags",
     "counts",
     "datasets"
   ],
@@ -26,25 +27,18 @@
         "null"
       ]
     },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "published_at": {
       "type": [
         "string",
         "null"
       ],
       "format": "date-time"
-    },
-    "readme_url": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "format": "uri"
-    },
-    "readme_filename": {
-      "type": [
-        "string",
-        "null"
-      ]
     },
     "counts": {
       "$ref": "./collection-counts.schema.json"

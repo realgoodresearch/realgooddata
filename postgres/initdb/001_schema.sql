@@ -5,8 +5,6 @@ create table if not exists collections (
     slug text unique not null,
     title text not null,
     summary text,
-    readme_bucket text,
-    readme_key text,
     published_at timestamptz not null default now(),
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
@@ -15,20 +13,25 @@ create table if not exists collections (
 create index if not exists collections_listing_idx
     on collections (published_at desc, title asc);
 
+create table if not exists collection_tags (
+    collection_id uuid not null references collections(id) on delete cascade,
+    tag text not null,
+    primary key (collection_id, tag)
+);
+
 create table if not exists datasets (
     id uuid primary key default gen_random_uuid(),
     collection_id uuid references collections(id) on delete set null,
     slug text unique not null,
     title text not null,
     summary text,
+    dataset_role text not null default 'data' check (dataset_role in ('data', 'documentation', 'visuals')),
     classification text not null check (classification in ('public', 'restricted', 'confidential')),
     visibility text not null default 'listed' check (visibility in ('listed', 'hidden')),
     storage_bucket text not null,
     storage_key text not null,
-    direct_public_url text,
     mime_type text,
     file_size_bytes bigint,
-    checksum_sha256 text,
     sort_order integer not null default 0,
     published_at timestamptz not null default now(),
     created_at timestamptz not null default now(),

@@ -38,16 +38,8 @@
           <label><span>Title</span><input type="text" name="title" required></label><br>
           <label><span>Slug</span><input type="text" name="slug" required></label><br>
           <label class="full"><span>Summary</span><textarea name="summary" rows="3"></textarea></label><br>
+          <label class="full"><span>Tags</span><input type="text" name="tags" placeholder="gaza, population, methods"></label><br>
           <label><span>Published at</span><input type="datetime-local" name="published_at"></label><br>
-          <label class="full">
-            <span>README file</span>
-            <select name="readme_object">
-              <option value="">None</option>
-              {% for option in readme_options %}
-              <option value="{{ option.bucket }}::{{ option.key }}">{{ option.label }}</option>
-              {% endfor %}
-            </select>
-          </label><br>
           <div class="full actions"><button type="submit" class="button-primary">Create collection</button></div>
         </form>
       </div>
@@ -78,7 +70,7 @@
               <th>Title</th>
               <th>Slug</th>
               <th>Datasets</th>
-              <th>README</th>
+              <th>Tags</th>
               <th></th>
             </tr>
           </thead>
@@ -88,8 +80,7 @@
               <td>{{ collection.title }}</td>
               <td><code>{{ collection.slug }}</code></td>
               <td>{{ collection.dataset_count }}</td>
-              <td>{% if collection.readme_key %}{{ collection.readme_bucket }}/{{ collection.readme_key }}{% else %}<span
-                  class="muted">None</span>{% endif %}</td>
+              <td>{{ collection.tags or '' }}</td>
               <td><a href="/admin/collections/{{ collection.id }}">Edit</a></td>
             </tr>
             {% endfor %}
@@ -157,6 +148,13 @@
           </label><br>
           <label><span>Title</span><input type="text" name="title" required></label><br>
           <label><span>Slug</span><input type="text" name="slug" required></label><br>
+          <label><span>Role</span>
+            <select name="dataset_role">
+              <option value="data" selected>data</option>
+              <option value="documentation">documentation</option>
+              <option value="visuals">visuals</option>
+            </select>
+          </label><br>
           <label><span>Classification</span>
             <select name="classification">
               <option value="public">public</option>
@@ -222,6 +220,7 @@
             <tr>
               <th>Title</th>
               <th>Collection</th>
+              <th>Role</th>
               <th>Classification</th>
               <th>Bucket/key</th>
               <th></th>
@@ -232,6 +231,7 @@
             <tr>
               <td>{{ dataset.title }}</td>
               <td>{{ dataset.collection_title or 'Standalone' }}</td>
+              <td>{{ dataset.dataset_role }}</td>
               <td>{{ dataset.classification }}</td>
               <td><code>{{ dataset.storage_bucket }}/{{ dataset.storage_key }}</code></td>
               <td><a href="/admin/datasets/{{ dataset.id }}">Edit</a></td>

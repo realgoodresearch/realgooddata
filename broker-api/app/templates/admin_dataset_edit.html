@@ -47,6 +47,15 @@
         </label>
         <br>
         <label>
+          <span>Role</span>
+          <select name="dataset_role">
+            {% for option in ['data', 'documentation', 'visuals'] %}
+            <option value="{{ option }}" {% if edit_dataset.dataset_role == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <br>
+        <label>
           <span>Classification</span>
           <select name="classification">
             {% for option in ['public', 'restricted', 'confidential'] %}

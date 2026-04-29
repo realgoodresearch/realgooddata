@@ -286,6 +286,57 @@ button:disabled {
   margin-top: 16px;
 }
 
+.detail-hero-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  background: #eff5f8;
+  color: #35566d;
+  border: 1px solid #dde7ed;
+}
+
+.detail-tabs {
+  display: flex;
+  gap: 10px;
+  margin-top: -6px;
+}
+
+.detail-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid $border-color;
+  background: $white;
+  color: $text-main;
+}
+
+.detail-tab span {
+  color: $text-muted;
+  font-size: 0.88rem;
+}
+
+.detail-tab.is-active {
+  background: #eef6fd;
+  color: $accent-blue-dark;
+  border-color: #cfe4f3;
+}
+
 .count-pill,
 .badge {
   display: inline-flex;
@@ -329,6 +380,73 @@ button:disabled {
   margin-top: 16px;
 }
 
+.documentation-card {
+  display: grid;
+  gap: 18px;
+}
+
+.documentation-primary {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: start;
+}
+
+.documentation-copy {
+  flex: 1 1 auto;
+}
+
+.documentation-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+  align-items: center;
+}
+
+.documentation-status {
+  margin: 14px 0 0;
+  color: $text-muted;
+}
+
+.documentation-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.documentation-list {
+  border-top: 1px solid $border-color;
+  padding-top: 18px;
+}
+
+.documentation-list h3 {
+  margin: 0 0 12px;
+  font-size: 1rem;
+}
+
+.documentation-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: start;
+  padding: 14px 0;
+  border-top: 1px solid $border-color;
+}
+
+.documentation-item:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.documentation-item-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-end;
+}
+
 .dataset-table-wrap {
   overflow-x: auto;
 }
@@ -336,7 +454,7 @@ button:disabled {
 .dataset-table {
   width: 100%;
   border-collapse: collapse;
-  table-layout: fixed;
+  table-layout: auto;
 }
 
 .dataset-table th,
@@ -358,30 +476,59 @@ button:disabled {
 
 .dataset-table th:first-child,
 .dataset-table td:first-child {
-  width: 60%;
+  width: auto;
 }
 
 .dataset-table th:nth-child(2),
 .dataset-table td:nth-child(2) {
-  width: 16%;
-}
-
-.dataset-table th:nth-child(3),
-.dataset-table td:nth-child(3) {
-  width: 10%;
+  width: 110px;
+  white-space: nowrap;
 }
 
 .dataset-table th:last-child,
 .dataset-table td:last-child {
-  width: 14%;
+  width: 180px;
 }
 
 .dataset-table td:first-child strong {
   display: block;
 }
 
+.dataset-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.role-badge {
+  background: #eef6fd;
+  color: $accent-blue-dark;
+}
+
+.role-documentation {
+  background: #eef6fd;
+  color: $accent-blue-dark;
+}
+
+.role-visuals {
+  background: #f3efe9;
+  color: #7a4f13;
+}
+
+.role-data {
+  background: #f3f5f6;
+  color: $text-muted;
+}
+
 .table-actions {
-  text-align: right;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
 }
 
 .status-card {
@@ -467,6 +614,8 @@ button:disabled {
   .collection-card-top,
   .detail-hero-top,
   .readme-header,
+  .documentation-primary,
+  .documentation-item,
   .search-row {
     flex-direction: column;
     align-items: stretch;
@@ -477,10 +626,18 @@ button:disabled {
     width: 100%;
   }
 
+  .documentation-item-meta {
+    align-items: stretch;
+  }
+
+  .detail-tabs {
+    flex-direction: column;
+  }
+
+  .dataset-table th:nth-child(2),
+  .dataset-table td:nth-child(2),
   .dataset-table th:nth-child(3),
-  .dataset-table td:nth-child(3),
-  .dataset-table th:nth-child(4),
-  .dataset-table td:nth-child(4) {
+  .dataset-table td:nth-child(3) {
     display: none;
   }
 }

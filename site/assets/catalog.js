@@ -1,9 +1,11 @@
 const storageKey = "rrg-data-portal-token";
+const invalidTokenMessage = "Invalid or expired access token";
 const state = {
   items: [],
   token: localStorage.getItem(storageKey) || "",
   query: ""
 };
+let statusTimeout = null;
 
 const searchInput = document.getElementById("search-input");
 const collectionList = document.getElementById("collection-list");
@@ -70,6 +72,10 @@ searchInput?.addEventListener("input", (event) => {
 });
 
 async function fetchCollections() {
+  return fetchCollectionsInternal(false);
+}
+
+async function fetchCollectionsInternal(retriedAfterInvalidToken) {
   const headers = {};
   if (state.token) {
     headers["X-Access-Token"] = state.token;
@@ -78,6 +84,17 @@ async function fetchCollections() {
   try {
     const response = await fetch("/api/v1/collections", { headers });
     const payload = await response.json().catch(() => ({}));
+    if (
+      response.status === 401 &&
+      state.token &&
+      !retriedAfterInvalidToken &&
+      isInvalidTokenError(payload)
+    ) {
+      clearActiveToken();
+      syncTokenTrigger();
+      showTemporaryStatus(invalidTokenMessage, true);
+      return fetchCollectionsInternal(true);
+    }
     if (!response.ok) {
       throw new Error(payload.detail || "Failed to load collections.");
     }
@@ -89,6 +106,19 @@ async function fetchCollections() {
     render();
     showStatus(error.message || "Failed to load collections.", true);
   }
+}
+
+function isInvalidTokenError(payload) {
+  const detail = String(payload?.detail || "").trim().toLowerCase();
+  return detail === "invalid or expired access token.";
+}
+
+function clearActiveToken() {
+  state.token = "";
+  if (tokenInput) {
+    tokenInput.value = "";
+  }
+  localStorage.removeItem(storageKey);
 }
 
 function render() {
@@ -126,6 +156,10 @@ function renderCollectionCard(item) {
   const card = document.createElement("a");
   card.className = "collection-card";
   card.href = `collection.html?slug=${encodeURIComponent(item.slug)}`;
+  const tags = Array.isArray(item.tags) ? item.tags.filter(Boolean) : [];
+  const tagsHtml = tags.length
+    ? `<div class="tag-list">${tags.map((tag) => `<span class="tag-chip">${escapeHtml(tag)}</span>`).join("")}</div>`
+    : "";
 
   const published = item.published_at
     ? new Date(item.published_at).toLocaleDateString(undefined, {
@@ -143,6 +177,7 @@ function renderCollectionCard(item) {
       </div>
     </div>
     <p class="summary">${escapeHtml(item.summary || "No summary provided.")}</p>
+    ${tagsHtml}
     <div class="meta">
       <span>${escapeHtml(published)}</span>
       <span>${item.counts.total} files</span>
@@ -213,7 +248,22 @@ function showStatus(message, isError = false) {
   statusNode.className = isError ? "status-card error" : "status-card";
 }
 
+function showTemporaryStatus(message, isError = false, durationMs = 4000) {
+  showStatus(message, isError);
+  if (statusTimeout) {
+    window.clearTimeout(statusTimeout);
+  }
+  statusTimeout = window.setTimeout(() => {
+    clearStatus();
+    statusTimeout = null;
+  }, durationMs);
+}
+
 function clearStatus() {
+  if (statusTimeout) {
+    window.clearTimeout(statusTimeout);
+    statusTimeout = null;
+  }
   document.getElementById("status")?.remove();
 }
 

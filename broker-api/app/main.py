@@ -6,12 +6,15 @@ from functools import lru_cache
 import hashlib
 import hmac
 import json
+import mimetypes
 from pathlib import Path
 import re
 import secrets
+import tempfile
 import time
 from typing import Annotated, Literal
 from uuid import UUID
+import zipfile
 from math import ceil
 
 import boto3
@@ -19,7 +22,7 @@ from botocore.client import BaseClient
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import psycopg
@@ -28,12 +31,14 @@ from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Classification = Literal["public", "restricted", "confidential"]
+DatasetRole = Literal["data", "documentation", "visuals"]
 AccessReason = Literal[
     "public",
     "token_granted",
     "token_required",
     "confidential_no_download",
 ]
+DeliveryMode = Literal["download", "inline"]
 
 
 class Settings(BaseSettings):
@@ -45,7 +50,6 @@ class Settings(BaseSettings):
     postgres_user: str
     postgres_password: str
     minio_endpoint: str
-    minio_public_endpoint: str | None = None
     minio_region: str = "us-east-1"
     minio_access_key: str
     minio_secret_key: str
@@ -78,14 +82,13 @@ class DatasetRecord(BaseModel):
     slug: str
     title: str
     summary: str | None = None
+    dataset_role: DatasetRole = "data"
     classification: Classification
     visibility: Literal["listed", "hidden"]
     storage_bucket: str
     storage_key: str
-    direct_public_url: str | None = None
     mime_type: str | None = None
     file_size_bytes: int | None = None
-    checksum_sha256: str | None = None
     sort_order: int = 0
     published_at: datetime | None = None
     tags: list[str] = Field(default_factory=list)
@@ -96,8 +99,7 @@ class CollectionRecord(BaseModel):
     slug: str
     title: str
     summary: str | None = None
-    readme_bucket: str | None = None
-    readme_key: str | None = None
+    tags: list[str] = Field(default_factory=list)
     published_at: datetime | None = None
 
 
@@ -108,6 +110,8 @@ class CatalogItem(BaseModel):
     filename: str
     title: str
     summary: str | None = None
+    dataset_role: DatasetRole = "data"
+    sort_order: int = 0
     classification: Classification
     listed: bool = True
     downloadable: bool
@@ -136,6 +140,7 @@ class CollectionSummary(BaseModel):
     slug: str
     title: str
     summary: str | None = None
+    tags: list[str] = Field(default_factory=list)
     published_at: datetime | None = None
     counts: CollectionCounts
     search_text: str = ""
@@ -150,9 +155,8 @@ class CollectionDetail(BaseModel):
     slug: str
     title: str
     summary: str | None = None
+    tags: list[str] = Field(default_factory=list)
     published_at: datetime | None = None
-    readme_url: str | None = None
-    readme_filename: str | None = None
     counts: CollectionCounts
     datasets: list[CatalogItem]
 
@@ -160,6 +164,7 @@ class CollectionDetail(BaseModel):
 class DownloadRequest(BaseModel):
     dataset_id: UUID
     download_filename: str | None = None
+    delivery_mode: DeliveryMode = "download"
 
 
 class DownloadResponse(BaseModel):
@@ -195,12 +200,6 @@ def build_s3_client(endpoint_url: str) -> BaseClient:
 @lru_cache
 def get_s3_client() -> BaseClient:
     return build_s3_client(get_settings().minio_endpoint)
-
-
-@lru_cache
-def get_presign_s3_client() -> BaseClient:
-    settings = get_settings()
-    return build_s3_client(settings.minio_public_endpoint or settings.minio_endpoint)
 
 
 def fingerprint_token(token: str) -> str:
@@ -314,6 +313,53 @@ def verify_admin_session(session_value: str | None, settings: Settings) -> bool:
     )
 
 
+def dataset_content_ticket_secret(settings: Settings) -> str:
+    return settings.admin_session_secret
+
+
+def build_dataset_content_ticket(dataset_id: UUID, settings: Settings) -> str:
+    payload = {
+        "dataset_id": str(dataset_id),
+        "exp": int(time.time()) + settings.presigned_url_ttl_seconds,
+    }
+    payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    payload_b64 = base64.urlsafe_b64encode(payload_bytes).decode("ascii").rstrip("=")
+    signature = hmac.new(
+        dataset_content_ticket_secret(settings).encode("utf-8"),
+        payload_b64.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{payload_b64}.{signature}"
+
+
+def verify_dataset_content_ticket(
+    ticket: str | None, dataset_id: UUID, settings: Settings
+) -> bool:
+    if not ticket or "." not in ticket:
+        return False
+    payload_b64, signature = ticket.rsplit(".", 1)
+    expected_signature = hmac.new(
+        dataset_content_ticket_secret(settings).encode("utf-8"),
+        payload_b64.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(signature, expected_signature):
+        return False
+
+    padding = "=" * (-len(payload_b64) % 4)
+    try:
+        payload = json.loads(
+            base64.urlsafe_b64decode((payload_b64 + padding).encode("ascii"))
+        )
+    except (ValueError, json.JSONDecodeError):
+        return False
+
+    return (
+        payload.get("dataset_id") == str(dataset_id)
+        and int(payload.get("exp", 0)) > int(time.time())
+    )
+
+
 def admin_authenticated(request: Request, settings: Settings) -> bool:
     return verify_admin_session(request.cookies.get("rrg_admin_session"), settings)
 
@@ -402,14 +448,13 @@ def load_catalog_dataset_rows(connection) -> list[DatasetRecord]:
           d.slug,
           d.title,
           d.summary,
+          d.dataset_role,
           d.classification,
           d.visibility,
           d.storage_bucket,
           d.storage_key,
-          d.direct_public_url,
           d.mime_type,
           d.file_size_bytes,
-          d.checksum_sha256,
           d.sort_order,
           d.published_at,
           coalesce(array_remove(array_agg(distinct t.tag), null), '{}') as tags
@@ -432,14 +477,13 @@ def load_dataset_by_id(connection, dataset_id: UUID) -> DatasetRecord | None:
           d.slug,
           d.title,
           d.summary,
+          d.dataset_role,
           d.classification,
           d.visibility,
           d.storage_bucket,
           d.storage_key,
-          d.direct_public_url,
           d.mime_type,
           d.file_size_bytes,
-          d.checksum_sha256,
           d.sort_order,
           d.published_at,
           coalesce(array_remove(array_agg(distinct t.tag), null), '{}') as tags
@@ -464,14 +508,13 @@ def load_dataset_by_slug(connection, slug: str) -> DatasetRecord | None:
           d.slug,
           d.title,
           d.summary,
+          d.dataset_role,
           d.classification,
           d.visibility,
           d.storage_bucket,
           d.storage_key,
-          d.direct_public_url,
           d.mime_type,
           d.file_size_bytes,
-          d.checksum_sha256,
           d.sort_order,
           d.published_at,
           coalesce(array_remove(array_agg(distinct t.tag), null), '{}') as tags
@@ -490,13 +533,21 @@ def load_dataset_by_slug(connection, slug: str) -> DatasetRecord | None:
 def load_collections(connection) -> list[CollectionRecord]:
     rows = connection.execute(
         """
-        select c.id, c.slug, c.title, c.summary, c.readme_bucket, c.readme_key, c.published_at
+        select
+          c.id,
+          c.slug,
+          c.title,
+          c.summary,
+          c.published_at,
+          coalesce(array_remove(array_agg(distinct ct.tag), null), '{}') as tags
         from collections c
+        left join collection_tags ct on ct.collection_id = c.id
         where exists (
           select 1
           from datasets d
           where d.collection_id = c.id and d.visibility = 'listed'
         )
+        group by c.id
         order by c.published_at desc nulls last, c.title asc
         """
     ).fetchall()
@@ -506,14 +557,22 @@ def load_collections(connection) -> list[CollectionRecord]:
 def load_collection_by_slug(connection, slug: str) -> CollectionRecord | None:
     row = connection.execute(
         """
-        select c.id, c.slug, c.title, c.summary, c.readme_bucket, c.readme_key, c.published_at
+        select
+          c.id,
+          c.slug,
+          c.title,
+          c.summary,
+          c.published_at,
+          coalesce(array_remove(array_agg(distinct ct.tag), null), '{}') as tags
         from collections c
+        left join collection_tags ct on ct.collection_id = c.id
         where c.slug = %(slug)s
           and exists (
             select 1
             from datasets d
             where d.collection_id = c.id and d.visibility = 'listed'
           )
+        group by c.id
         """,
         {"slug": slug},
     ).fetchone()
@@ -531,14 +590,13 @@ def load_collection_datasets(connection, collection_id: UUID) -> list[DatasetRec
           d.slug,
           d.title,
           d.summary,
+          d.dataset_role,
           d.classification,
           d.visibility,
           d.storage_bucket,
           d.storage_key,
-          d.direct_public_url,
           d.mime_type,
           d.file_size_bytes,
-          d.checksum_sha256,
           d.sort_order,
           d.published_at,
           coalesce(array_remove(array_agg(distinct t.tag), null), '{}') as tags
@@ -562,12 +620,12 @@ def load_admin_collection_rows(connection) -> list[dict]:
           c.slug,
           c.title,
           c.summary,
-          c.readme_bucket,
-          c.readme_key,
           c.published_at,
+          coalesce(string_agg(distinct ct.tag, ', ' order by ct.tag), '') as tags,
           count(d.id) filter (where d.visibility = 'listed') as dataset_count
         from collections c
         left join datasets d on d.collection_id = c.id
+        left join collection_tags ct on ct.collection_id = c.id
         group by c.id
         order by c.published_at desc nulls last, c.title asc
         """
@@ -594,13 +652,15 @@ def load_admin_collection_page(
           c.title ilike %(search)s
           or c.slug ilike %(search)s
           or coalesce(c.summary, '') ilike %(search)s
+          or coalesce(ct.tag, '') ilike %(search)s
         )
         """
 
     total = connection.execute(
         f"""
-        select count(*)
+        select count(distinct c.id)
         from collections c
+        left join collection_tags ct on ct.collection_id = c.id
         {where_clause}
         """,
         params,
@@ -615,12 +675,12 @@ def load_admin_collection_page(
           c.slug,
           c.title,
           c.summary,
-          c.readme_bucket,
-          c.readme_key,
           c.published_at,
+          coalesce(string_agg(distinct ct.tag, ', ' order by ct.tag), '') as tags,
           count(d.id) filter (where d.visibility = 'listed') as dataset_count
         from collections c
         left join datasets d on d.collection_id = c.id
+        left join collection_tags ct on ct.collection_id = c.id
         {where_clause}
         group by c.id
         order by c.published_at desc nulls last, c.title asc
@@ -635,15 +695,16 @@ def load_admin_collection_row(connection, collection_id: UUID) -> dict | None:
     return connection.execute(
         """
         select
-          id,
-          slug,
-          title,
-          summary,
-          readme_bucket,
-          readme_key,
-          published_at
-        from collections
-        where id = %(collection_id)s
+          c.id,
+          c.slug,
+          c.title,
+          c.summary,
+          c.published_at,
+          coalesce(string_agg(distinct ct.tag, ', ' order by ct.tag), '') as tags
+        from collections c
+        left join collection_tags ct on ct.collection_id = c.id
+        where c.id = %(collection_id)s
+        group by c.id
         """,
         {"collection_id": str(collection_id)},
     ).fetchone()
@@ -658,6 +719,7 @@ def load_admin_dataset_rows(connection, collection_id: UUID | None = None) -> li
           d.slug,
           d.title,
           d.summary,
+          d.dataset_role,
           d.classification,
           d.visibility,
           d.storage_bucket,
@@ -706,6 +768,7 @@ def load_admin_dataset_page(
               d.title ilike %(search)s
               or d.slug ilike %(search)s
               or coalesce(d.summary, '') ilike %(search)s
+              or d.dataset_role ilike %(search)s
               or d.storage_bucket ilike %(search)s
               or d.storage_key ilike %(search)s
               or coalesce(c.title, '') ilike %(search)s
@@ -738,6 +801,7 @@ def load_admin_dataset_page(
           d.slug,
           d.title,
           d.summary,
+          d.dataset_role,
           d.classification,
           d.visibility,
           d.storage_bucket,
@@ -768,6 +832,7 @@ def load_admin_dataset_row(connection, dataset_id: UUID) -> dict | None:
           d.slug,
           d.title,
           d.summary,
+          d.dataset_role,
           d.classification,
           d.visibility,
           d.storage_bucket,
@@ -866,28 +931,6 @@ def load_bucket_objects(
     return objects
 
 
-def load_readme_options(s3_client: BaseClient) -> list[dict[str, str]]:
-    options: list[dict[str, str]] = []
-    for bucket_name in load_bucket_names(s3_client):
-        paginator = s3_client.get_paginator("list_objects_v2")
-        try:
-            for page in paginator.paginate(Bucket=bucket_name):
-                for obj in page.get("Contents", []):
-                    key = obj["Key"]
-                    if not key.lower().endswith(".pdf"):
-                        continue
-                    options.append(
-                        {
-                            "bucket": bucket_name,
-                            "key": key,
-                            "label": f"{bucket_name} / {key}",
-                        }
-                    )
-        except ClientError:
-            continue
-    return options
-
-
 def token_grants_dataset(dataset: DatasetRecord, grants: list[TokenGrant]) -> bool:
     for grant in grants:
         if grant.dataset_id and grant.dataset_id != dataset.id:
@@ -932,6 +975,8 @@ def build_catalog_item(dataset: DatasetRecord, grants: list[TokenGrant]) -> Cata
         filename=object_public_filename(dataset.storage_key),
         title=dataset.title,
         summary=dataset.summary,
+        dataset_role=dataset.dataset_role,
+        sort_order=dataset.sort_order,
         classification=dataset.classification,
         listed=dataset.visibility == "listed",
         downloadable=downloadable,
@@ -964,6 +1009,23 @@ def build_collection_counts(
     )
 
 
+def build_unique_archive_names(datasets: list[DatasetRecord]) -> dict[UUID, str]:
+    seen: dict[str, int] = {}
+    archive_names: dict[UUID, str] = {}
+    for dataset in datasets:
+        filename = object_public_filename(dataset.storage_key)
+        path = Path(filename)
+        stem = path.stem or filename
+        suffix = path.suffix
+        count = seen.get(filename, 0) + 1
+        seen[filename] = count
+        if count == 1:
+            archive_names[dataset.id] = filename
+        else:
+            archive_names[dataset.id] = f"{stem}-{count}{suffix}"
+    return archive_names
+
+
 def build_collection_summary(
     collection: CollectionRecord,
     datasets: list[DatasetRecord],
@@ -973,6 +1035,7 @@ def build_collection_summary(
         collection.title,
         collection.slug,
         collection.summary or "",
+        *collection.tags,
     ]
     for dataset in datasets:
         search_terms.extend(
@@ -989,6 +1052,7 @@ def build_collection_summary(
         slug=collection.slug,
         title=collection.title,
         summary=collection.summary,
+        tags=collection.tags,
         published_at=collection.published_at,
         counts=build_collection_counts(datasets, grants),
         search_text=" ".join(term for term in search_terms if term).strip(),
@@ -999,67 +1063,35 @@ def object_public_filename(key: str) -> str:
     return key.rsplit("/", 1)[-1] if key else "download"
 
 
-def generate_object_download_url(
-    *,
-    bucket: str,
-    key: str,
-    s3_client: BaseClient,
-    presign_client: BaseClient,
-    settings: Settings,
-    download_filename: str | None = None,
-) -> tuple[str, int | None]:
-    try:
-        s3_client.head_object(Bucket=bucket, Key=key)
-    except ClientError as exc:
-        error_code = exc.response.get("Error", {}).get("Code", "")
-        if error_code in {"404", "NoSuchKey", "NotFound"}:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Requested object was not found.",
-            ) from exc
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Storage backend error while validating object.",
-        ) from exc
-
-    params = {"Bucket": bucket, "Key": key}
-    if download_filename:
-        params["ResponseContentDisposition"] = (
-            f'attachment; filename="{download_filename}"'
-        )
-
-    try:
-        url = presign_client.generate_presigned_url(
-            ClientMethod="get_object",
-            Params=params,
-            ExpiresIn=settings.presigned_url_ttl_seconds,
-        )
-    except ClientError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to create presigned URL.",
-        ) from exc
-
-    return url, settings.presigned_url_ttl_seconds
-
-
-def generate_dataset_download_url(
+def generate_dataset_content_url(
     dataset: DatasetRecord,
     *,
-    s3_client: BaseClient,
-    presign_client: BaseClient,
     settings: Settings,
-    download_filename: str | None,
-) -> tuple[str, int | None]:
-    if dataset.direct_public_url:
-        return dataset.direct_public_url, None
-    return generate_object_download_url(
-        bucket=dataset.storage_bucket,
-        key=dataset.storage_key,
-        s3_client=s3_client,
-        presign_client=presign_client,
-        settings=settings,
-        download_filename=download_filename,
+    disposition: Literal["inline", "attachment"] = "attachment",
+) -> tuple[str, int]:
+    ticket = build_dataset_content_ticket(dataset.id, settings)
+    return (
+        f"/api/v1/datasets/{dataset.id}/content?ticket={ticket}&disposition={disposition}",
+        settings.presigned_url_ttl_seconds,
+    )
+
+
+def dataset_supports_inline_view(dataset: DatasetRecord) -> bool:
+    if dataset.dataset_role not in {"documentation", "visuals"}:
+        return False
+    mime_type = (dataset.mime_type or "").lower()
+    if (
+        mime_type.startswith("text/html")
+        or mime_type.startswith("image/")
+        or mime_type == "application/pdf"
+    ):
+        return True
+    guessed_mime_type, _ = mimetypes.guess_type(dataset.storage_key)
+    guessed_mime_type = (guessed_mime_type or "").lower()
+    return (
+        guessed_mime_type.startswith("text/html")
+        or guessed_mime_type.startswith("image/")
+        or guessed_mime_type == "application/pdf"
     )
 
 
@@ -1067,36 +1099,14 @@ def build_collection_detail(
     collection: CollectionRecord,
     datasets: list[DatasetRecord],
     grants: list[TokenGrant],
-    *,
-    s3_client: BaseClient,
-    presign_client: BaseClient,
-    settings: Settings,
 ) -> CollectionDetail:
-    readme_url = None
-    readme_filename = None
-    if collection.readme_bucket and collection.readme_key:
-        try:
-            readme_url, _ = generate_object_download_url(
-                bucket=collection.readme_bucket,
-                key=collection.readme_key,
-                s3_client=s3_client,
-                presign_client=presign_client,
-                settings=settings,
-                download_filename=None,
-            )
-            readme_filename = object_public_filename(collection.readme_key)
-        except HTTPException as exc:
-            if exc.status_code != status.HTTP_404_NOT_FOUND:
-                raise
-
     return CollectionDetail(
         id=collection.id,
         slug=collection.slug,
         title=collection.title,
         summary=collection.summary,
+        tags=collection.tags,
         published_at=collection.published_at,
-        readme_url=readme_url,
-        readme_filename=readme_filename,
         counts=build_collection_counts(datasets, grants),
         datasets=[build_catalog_item(dataset, grants) for dataset in datasets],
     )
@@ -1121,6 +1131,18 @@ def insert_dataset_tags(connection, dataset_id: str, tags: list[str]) -> None:
             on conflict do nothing
             """,
             {"dataset_id": dataset_id, "tag": tag},
+        )
+
+
+def insert_collection_tags(connection, collection_id: str, tags: list[str]) -> None:
+    for tag in tags:
+        connection.execute(
+            """
+            insert into collection_tags (collection_id, tag)
+            values (%(collection_id)s, %(tag)s)
+            on conflict do nothing
+            """,
+            {"collection_id": collection_id, "tag": tag},
         )
 
 
@@ -1193,7 +1215,6 @@ def admin_context(
         "dataset_choices": load_dataset_choices(connection),
         "collection_choices": load_collection_choices(connection),
         "bucket_names": load_bucket_names(s3_client),
-        "readme_options": load_readme_options(s3_client),
         "edit_collection": edit_collection,
         "edit_dataset": edit_dataset,
         "selected_collection_id": str(selected_collection_id) if selected_collection_id else "",
@@ -1250,9 +1271,6 @@ def collection_detail(
     slug: str,
     auth_context: AuthContext | None = Depends(load_auth_context),
     connection=Depends(get_db_connection),
-    s3_client: BaseClient = Depends(get_s3_client),
-    presign_client: BaseClient = Depends(get_presign_s3_client),
-    settings: Settings = Depends(get_settings),
 ) -> CollectionDetail:
     collection = load_collection_by_slug(connection, slug)
     if not collection:
@@ -1267,9 +1285,87 @@ def collection_detail(
         collection,
         datasets,
         grants,
-        s3_client=s3_client,
-        presign_client=presign_client,
-        settings=settings,
+    )
+
+
+@app.get("/v1/collections/{slug}/download-all")
+def collection_download_all(
+    slug: str,
+    auth_context: AuthContext | None = Depends(load_auth_context),
+    connection=Depends(get_db_connection),
+    s3_client: BaseClient = Depends(get_s3_client),
+):
+    collection = load_collection_by_slug(connection, slug)
+    if not collection:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Collection not found.",
+        )
+
+    grants = load_token_grants(connection, auth_context.token_id if auth_context else None)
+    datasets = load_collection_datasets(connection, collection.id)
+    downloadable = [
+        dataset for dataset in datasets if evaluate_dataset_access(dataset, grants)[0]
+    ]
+    if not downloadable:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No downloadable files are currently available in this collection.",
+        )
+
+    archive_names = build_unique_archive_names(downloadable)
+    archive_file = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
+
+    try:
+        with zipfile.ZipFile(
+            archive_file,
+            mode="w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as archive:
+            for dataset in downloadable:
+                try:
+                    storage_response = s3_client.get_object(
+                        Bucket=dataset.storage_bucket,
+                        Key=dataset.storage_key,
+                    )
+                except ClientError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail="Storage backend error while building collection archive.",
+                    ) from exc
+
+                body = storage_response["Body"]
+                try:
+                    with archive.open(archive_names[dataset.id], "w") as archive_member:
+                        for chunk in body.iter_chunks(chunk_size=64 * 1024):
+                            if chunk:
+                                archive_member.write(chunk)
+                finally:
+                    body.close()
+    except Exception:
+        archive_file.close()
+        raise
+
+    archive_file.seek(0)
+    archive_filename = f"{collection.slug}.zip"
+
+    def archive_iterator():
+        try:
+            while True:
+                chunk = archive_file.read(64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            archive_file.close()
+
+    return StreamingResponse(
+        archive_iterator(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{archive_filename}"',
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 
@@ -1290,13 +1386,77 @@ def dataset_detail(
     return build_catalog_item(dataset, grants)
 
 
+@app.get("/v1/datasets/{dataset_id}/content")
+def dataset_content(
+    dataset_id: UUID,
+    ticket: str,
+    disposition: str = "attachment",
+    connection=Depends(get_db_connection),
+    s3_client: BaseClient = Depends(get_s3_client),
+    settings: Settings = Depends(get_settings),
+):
+    if not verify_dataset_content_ticket(ticket, dataset_id, settings):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired content ticket.",
+        )
+
+    dataset = load_dataset_by_id(connection, dataset_id)
+    if not dataset:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dataset not found.",
+        )
+
+    try:
+        storage_response = s3_client.get_object(
+            Bucket=dataset.storage_bucket,
+            Key=dataset.storage_key,
+        )
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "")
+        if error_code in {"404", "NoSuchKey", "NotFound"}:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Requested object was not found.",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Storage backend error while fetching object.",
+        ) from exc
+
+    body = storage_response["Body"]
+    guessed_mime_type, _ = mimetypes.guess_type(dataset.storage_key)
+    media_type = (
+        dataset.mime_type
+        or storage_response.get("ContentType")
+        or guessed_mime_type
+        or "application/octet-stream"
+    )
+    filename = object_public_filename(dataset.storage_key)
+    content_disposition = "inline" if disposition == "inline" else "attachment"
+
+    def content_iterator():
+        try:
+            yield from body.iter_chunks(chunk_size=64 * 1024)
+        finally:
+            body.close()
+
+    return StreamingResponse(
+        content_iterator(),
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'{content_disposition}; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @app.post("/v1/download-url", response_model=DownloadResponse)
 def create_download_url(
     payload: DownloadRequest,
     auth_context: AuthContext | None = Depends(load_auth_context),
     connection=Depends(get_db_connection),
-    s3_client: BaseClient = Depends(get_s3_client),
-    presign_client: BaseClient = Depends(get_presign_s3_client),
     settings: Settings = Depends(get_settings),
 ) -> DownloadResponse:
     dataset = load_dataset_by_id(connection, payload.dataset_id)
@@ -1317,13 +1477,18 @@ def create_download_url(
             expires_in=None,
         )
 
-    download_url, expires_in = generate_dataset_download_url(
-        dataset,
-        s3_client=s3_client,
-        presign_client=presign_client,
-        settings=settings,
-        download_filename=payload.download_filename,
-    )
+    if payload.delivery_mode == "inline" and dataset_supports_inline_view(dataset):
+        download_url, expires_in = generate_dataset_content_url(
+            dataset,
+            settings=settings,
+            disposition="inline",
+        )
+    else:
+        download_url, expires_in = generate_dataset_content_url(
+            dataset,
+            settings=settings,
+            disposition="attachment",
+        )
     return DownloadResponse(
         dataset_id=dataset.id,
         allowed=True,
@@ -1609,9 +1774,7 @@ async def admin_create_collection(
     title = str(form.get("title", "")).strip()
     slug = str(form.get("slug", "")).strip()
     summary = str(form.get("summary", "")).strip() or None
-    readme_bucket, readme_key = parse_readme_selection(
-        str(form.get("readme_object", "")).strip() or None
-    )
+    tags = normalize_tags(str(form.get("tags", "")).strip() or None)
     published_at = parse_optional_datetime(str(form.get("published_at", "")).strip() or None)
 
     if not title or not slug:
@@ -1625,18 +1788,18 @@ async def admin_create_collection(
     try:
         connection.execute(
             """
-            insert into collections (title, slug, summary, readme_bucket, readme_key, published_at)
-            values (%(title)s, %(slug)s, %(summary)s, %(readme_bucket)s, %(readme_key)s, coalesce(%(published_at)s, now()))
+            insert into collections (title, slug, summary, published_at)
+            values (%(title)s, %(slug)s, %(summary)s, coalesce(%(published_at)s, now()))
+            returning id
             """,
             {
                 "title": title,
                 "slug": slug,
                 "summary": summary,
-                "readme_bucket": readme_bucket,
-                "readme_key": readme_key,
                 "published_at": published_at,
             },
-        )
+        ).fetchone()
+        insert_collection_tags(connection, str(row["id"]), tags)
         connection.commit()
     except Exception:
         connection.rollback()
@@ -1685,9 +1848,7 @@ async def admin_update_collection(
     title = str(form.get("title", "")).strip()
     slug = str(form.get("slug", "")).strip()
     summary = str(form.get("summary", "")).strip() or None
-    readme_bucket, readme_key = parse_readme_selection(
-        str(form.get("readme_object", "")).strip() or None
-    )
+    tags = normalize_tags(str(form.get("tags", "")).strip() or None)
     published_at = parse_optional_datetime(str(form.get("published_at", "")).strip() or None)
 
     try:
@@ -1698,8 +1859,6 @@ async def admin_update_collection(
               title = %(title)s,
               slug = %(slug)s,
               summary = %(summary)s,
-              readme_bucket = %(readme_bucket)s,
-              readme_key = %(readme_key)s,
               published_at = coalesce(%(published_at)s, published_at)
             where id = %(collection_id)s
             """,
@@ -1708,11 +1867,14 @@ async def admin_update_collection(
                 "title": title,
                 "slug": slug,
                 "summary": summary,
-                "readme_bucket": readme_bucket,
-                "readme_key": readme_key,
                 "published_at": published_at,
             },
         )
+        connection.execute(
+            "delete from collection_tags where collection_id = %(collection_id)s",
+            {"collection_id": str(collection_id)},
+        )
+        insert_collection_tags(connection, str(collection_id), tags)
         connection.commit()
     except Exception:
         connection.rollback()
@@ -1772,11 +1934,11 @@ async def admin_create_dataset(
         row = connection.execute(
             """
             insert into datasets (
-              collection_id, slug, title, summary, classification, visibility,
+              collection_id, slug, title, summary, dataset_role, classification, visibility,
               storage_bucket, storage_key, mime_type, file_size_bytes, sort_order, published_at
             )
             values (
-              %(collection_id)s, %(slug)s, %(title)s, %(summary)s, %(classification)s, %(visibility)s,
+              %(collection_id)s, %(slug)s, %(title)s, %(summary)s, %(dataset_role)s, %(classification)s, %(visibility)s,
               %(storage_bucket)s, %(storage_key)s, %(mime_type)s, %(file_size_bytes)s, %(sort_order)s,
               coalesce(%(published_at)s, now())
             )
@@ -1787,6 +1949,7 @@ async def admin_create_dataset(
                 "slug": slug,
                 "title": title,
                 "summary": str(form.get("summary", "")).strip() or None,
+                "dataset_role": str(form.get("dataset_role", "data")).strip(),
                 "classification": str(form.get("classification", "public")).strip(),
                 "visibility": str(form.get("visibility", "listed")).strip(),
                 "storage_bucket": str(form.get("storage_bucket", "")).strip(),
@@ -1922,11 +2085,11 @@ async def admin_import_datasets(
             connection.execute(
                 """
                 insert into datasets (
-                  collection_id, slug, title, summary, classification, visibility,
+                  collection_id, slug, title, summary, dataset_role, classification, visibility,
                   storage_bucket, storage_key, file_size_bytes, sort_order, published_at
                 )
                 values (
-                  %(collection_id)s, %(slug)s, %(title)s, null, 'confidential', %(visibility)s,
+                  %(collection_id)s, %(slug)s, %(title)s, null, 'data', 'confidential', %(visibility)s,
                   %(storage_bucket)s, %(storage_key)s, %(file_size_bytes)s, %(sort_order)s, now()
                 )
                 """,
@@ -2020,6 +2183,7 @@ async def admin_update_dataset(
               slug = %(slug)s,
               title = %(title)s,
               summary = %(summary)s,
+              dataset_role = %(dataset_role)s,
               classification = %(classification)s,
               visibility = %(visibility)s,
               storage_bucket = %(storage_bucket)s,
@@ -2036,6 +2200,7 @@ async def admin_update_dataset(
                 "slug": str(form.get("slug", "")).strip(),
                 "title": str(form.get("title", "")).strip(),
                 "summary": str(form.get("summary", "")).strip() or None,
+                "dataset_role": str(form.get("dataset_role", "data")).strip(),
                 "classification": str(form.get("classification", "public")).strip(),
                 "visibility": str(form.get("visibility", "listed")).strip(),
                 "storage_bucket": str(form.get("storage_bucket", "")).strip(),

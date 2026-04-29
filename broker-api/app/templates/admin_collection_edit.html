@@ -41,19 +41,14 @@
           <textarea name="summary" rows="4">{{ edit_collection.summary or '' }}</textarea>
         </label>
         <br>
+        <label class="full">
+          <span>Tags</span>
+          <input type="text" name="tags" value="{{ edit_collection.tags or '' }}" placeholder="gaza, population, methods">
+        </label>
+        <br>
         <label>
           <span>Published at</span>
           <input type="datetime-local" name="published_at" value="{{ edit_collection.published_at.strftime('%Y-%m-%dT%H:%M') if edit_collection.published_at else '' }}">
-        </label>
-        <br>
-        <label class="full">
-          <span>README file</span>
-          <select name="readme_object">
-            <option value="">None</option>
-            {% for option in readme_options %}
-            <option value="{{ option.bucket }}::{{ option.key }}" {% if edit_collection.readme_bucket == option.bucket and edit_collection.readme_key == option.key %}selected{% endif %}>{{ option.label }}</option>
-            {% endfor %}
-          </select>
         </label>
         <br>
         <div class="full actions">

@@ -8,6 +8,8 @@
     "slug",
     "filename",
     "title",
+    "dataset_role",
+    "sort_order",
     "classification",
     "listed",
     "downloadable",
@@ -40,6 +42,17 @@
         "string",
         "null"
       ]
+    },
+    "dataset_role": {
+      "type": "string",
+      "enum": [
+        "data",
+        "documentation",
+        "visuals"
+      ]
+    },
+    "sort_order": {
+      "type": "integer"
     },
     "classification": {
       "type": "string",
