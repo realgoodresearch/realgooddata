@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Admin Tokens</title>
-  <link rel="stylesheet" href="{{ request.url_for('admin-static', path='admin.css') }}">
+  <link rel="stylesheet" href="/admin/static/admin.css?v=20260429-1">
 </head>
 <body>
   <header class="admin-topbar">
@@ -12,8 +12,11 @@
       <p class="eyebrow">Real Good Data Admin</p>
       <h1>Token Management</h1>
       <nav class="admin-nav">
-        <a href="/admin/catalog" class="{% if current_section == 'catalog' %}active{% endif %}">Catalog</a>
-        <a href="/admin/tokens" class="{% if current_section == 'tokens' %}active{% endif %}">Tokens</a>
+        <a href="/admin/catalog?tab=create-collection" class="{% if active_tab == 'create-collection' %}active{% endif %}">Create Collection</a>
+        <a href="/admin/catalog?tab=list-collections" class="{% if active_tab == 'list-collections' %}active{% endif %}">List Collections</a>
+        <a href="/admin/catalog?tab=import-data" class="{% if active_tab == 'import-data' %}active{% endif %}">Import Data</a>
+        <a href="/admin/catalog?tab=list-data" class="{% if active_tab == 'list-data' %}active{% endif %}">List Data</a>
+        <a href="/admin/tokens" class="{% if active_tab == 'tokens' %}active{% endif %}">Tokens</a>
       </nav>
     </div>
     <form method="post" action="/admin/logout">

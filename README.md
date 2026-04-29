@@ -49,6 +49,7 @@ The nginx config currently restricts `/admin` to:
 - `127.0.0.1`
 - `::1`
 - `10.6.0.0/24`
+- `192.168.50.0/24`
 
 Anything outside that VPN/local range receives `403 Forbidden` before the login
 page is reached.
@@ -74,7 +75,16 @@ The first admin release supports:
 - token creation and revocation
 - collection create/edit
 - dataset create/edit
+- bulk import from a MinIO bucket/prefix into a collection
 - README selection from existing MinIO PDF objects
+
+Bulk import behavior:
+
+- target collection is required
+- imported rows default to `classification=confidential`
+- `storage_bucket`, `storage_key`, and `file_size_bytes` are populated from MinIO
+- title and slug are auto-generated from the object filename
+- existing catalog rows for the same bucket/object key are skipped
 
 ## Storage Location
 

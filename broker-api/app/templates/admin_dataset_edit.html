@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Edit Dataset</title>
-  <link rel="stylesheet" href="{{ request.url_for('admin-static', path='admin.css') }}">
+  <link rel="stylesheet" href="/admin/static/admin.css?v=20260429-1">
 </head>
 <body>
   <header class="admin-topbar">
@@ -12,11 +12,14 @@
       <p class="eyebrow">Real Good Data Admin</p>
       <h1>Edit Dataset</h1>
       <nav class="admin-nav">
-        <a href="/admin/catalog" class="active">Catalog</a>
+        <a href="/admin/catalog?tab=create-collection">Create Collection</a>
+        <a href="/admin/catalog?tab=list-collections">List Collections</a>
+        <a href="/admin/catalog?tab=import-data">Import Data</a>
+        <a href="/admin/catalog?tab=list-data" class="active">List Data</a>
         <a href="/admin/tokens">Tokens</a>
       </nav>
     </div>
-    <a href="/admin/catalog" class="button-secondary button-link">Back to catalog</a>
+    <a href="/admin/catalog?tab=list-data" class="button-secondary button-link">Back to data</a>
   </header>
   <main class="admin-layout single-panel">
     {% if message %}<div class="notice success">{{ message }}</div>{% endif %}

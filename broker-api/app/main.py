@@ -7,10 +7,12 @@ import hashlib
 import hmac
 import json
 from pathlib import Path
+import re
 import secrets
 import time
 from typing import Annotated, Literal
 from uuid import UUID
+from math import ceil
 
 import boto3
 from botocore.client import BaseClient
@@ -226,6 +228,14 @@ def parse_optional_int(value: str | None) -> int | None:
     return int(value)
 
 
+def parse_page(value: str | None) -> int:
+    try:
+        page = int(value or "1")
+    except ValueError:
+        return 1
+    return max(page, 1)
+
+
 def normalize_tags(value: str | None) -> list[str]:
     if not value:
         return []
@@ -238,6 +248,20 @@ def normalize_tags(value: str | None) -> list[str]:
         seen.add(tag)
         tags.append(tag)
     return tags
+
+
+def slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "dataset"
+
+
+def object_title_from_key(key: str) -> str:
+    filename = object_public_filename(key)
+    stem, _, _extension = filename.rpartition(".")
+    if not stem:
+        stem = filename
+    title = re.sub(r"[_-]+", " ", stem).strip()
+    return title or filename
 
 
 def parse_readme_selection(value: str | None) -> tuple[str | None, str | None]:
@@ -550,6 +574,63 @@ def load_admin_collection_rows(connection) -> list[dict]:
     ).fetchall()
 
 
+def load_admin_collection_page(
+    connection,
+    *,
+    search: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[dict], int]:
+    search_term = search.strip() if search else ""
+    params: dict[str, object] = {
+        "limit": page_size,
+        "offset": (page - 1) * page_size,
+    }
+    where_clause = ""
+    if search_term:
+        params["search"] = f"%{search_term}%"
+        where_clause = """
+        where (
+          c.title ilike %(search)s
+          or c.slug ilike %(search)s
+          or coalesce(c.summary, '') ilike %(search)s
+        )
+        """
+
+    total = connection.execute(
+        f"""
+        select count(*)
+        from collections c
+        {where_clause}
+        """,
+        params,
+    ).fetchone()["count"]
+    total_pages = max(1, ceil(total / page_size)) if total else 1
+    effective_page = min(max(page, 1), total_pages)
+    params["offset"] = (effective_page - 1) * page_size
+    rows = connection.execute(
+        f"""
+        select
+          c.id,
+          c.slug,
+          c.title,
+          c.summary,
+          c.readme_bucket,
+          c.readme_key,
+          c.published_at,
+          count(d.id) filter (where d.visibility = 'listed') as dataset_count
+        from collections c
+        left join datasets d on d.collection_id = c.id
+        {where_clause}
+        group by c.id
+        order by c.published_at desc nulls last, c.title asc
+        limit %(limit)s offset %(offset)s
+        """,
+        params,
+    ).fetchall()
+    return rows, total
+
+
 def load_admin_collection_row(connection, collection_id: UUID) -> dict | None:
     return connection.execute(
         """
@@ -598,6 +679,84 @@ def load_admin_dataset_rows(connection, collection_id: UUID | None = None) -> li
         order by coalesce(c.title, ''), d.sort_order asc, d.published_at desc nulls last, d.title asc
     """
     return connection.execute(query, params).fetchall()
+
+
+def load_admin_dataset_page(
+    connection,
+    *,
+    collection_id: UUID | None = None,
+    search: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[dict], int]:
+    params: dict[str, object] = {
+        "limit": page_size,
+        "offset": (page - 1) * page_size,
+    }
+    conditions: list[str] = []
+    if collection_id:
+        conditions.append("d.collection_id = %(collection_id)s")
+        params["collection_id"] = str(collection_id)
+    search_term = search.strip() if search else ""
+    if search_term:
+        params["search"] = f"%{search_term}%"
+        conditions.append(
+            """
+            (
+              d.title ilike %(search)s
+              or d.slug ilike %(search)s
+              or coalesce(d.summary, '') ilike %(search)s
+              or d.storage_bucket ilike %(search)s
+              or d.storage_key ilike %(search)s
+              or coalesce(c.title, '') ilike %(search)s
+              or coalesce(t.tag, '') ilike %(search)s
+            )
+            """
+        )
+    where_clause = f"where {' and '.join(conditions)}" if conditions else ""
+
+    total = connection.execute(
+        f"""
+        select count(distinct d.id)
+        from datasets d
+        left join collections c on c.id = d.collection_id
+        left join dataset_tags t on t.dataset_id = d.id
+        {where_clause}
+        """,
+        params,
+    ).fetchone()["count"]
+    total_pages = max(1, ceil(total / page_size)) if total else 1
+    effective_page = min(max(page, 1), total_pages)
+    params["offset"] = (effective_page - 1) * page_size
+
+    rows = connection.execute(
+        f"""
+        select
+          d.id,
+          d.collection_id,
+          c.title as collection_title,
+          d.slug,
+          d.title,
+          d.summary,
+          d.classification,
+          d.visibility,
+          d.storage_bucket,
+          d.storage_key,
+          d.file_size_bytes,
+          d.sort_order,
+          d.published_at,
+          coalesce(string_agg(distinct t.tag, ', ' order by t.tag), '') as tags
+        from datasets d
+        left join collections c on c.id = d.collection_id
+        left join dataset_tags t on t.dataset_id = d.id
+        {where_clause}
+        group by d.id, c.title
+        order by coalesce(c.title, ''), d.sort_order asc, d.published_at desc nulls last, d.title asc
+        limit %(limit)s offset %(offset)s
+        """,
+        params,
+    ).fetchall()
+    return rows, total
 
 
 def load_admin_dataset_row(connection, dataset_id: UUID) -> dict | None:
@@ -685,6 +844,26 @@ def load_bucket_names(s3_client: BaseClient) -> list[str]:
     except ClientError:
         return []
     return sorted(bucket["Name"] for bucket in buckets)
+
+
+def load_bucket_objects(
+    s3_client: BaseClient, *, bucket_name: str, prefix: str | None = None
+) -> list[dict[str, str | int]]:
+    normalized_prefix = (prefix or "").lstrip("/")
+    paginator = s3_client.get_paginator("list_objects_v2")
+    objects: list[dict[str, str | int]] = []
+    for page in paginator.paginate(Bucket=bucket_name, Prefix=normalized_prefix):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if key.endswith("/"):
+                continue
+            objects.append(
+                {
+                    "key": key,
+                    "file_size_bytes": int(obj.get("Size", 0)),
+                }
+            )
+    return objects
 
 
 def load_readme_options(s3_client: BaseClient) -> list[dict[str, str]]:
@@ -923,6 +1102,52 @@ def build_collection_detail(
     )
 
 
+def build_unique_slug(base_slug: str, existing_slugs: set[str]) -> str:
+    candidate = base_slug
+    counter = 2
+    while candidate in existing_slugs:
+        candidate = f"{base_slug}-{counter}"
+        counter += 1
+    existing_slugs.add(candidate)
+    return candidate
+
+
+def insert_dataset_tags(connection, dataset_id: str, tags: list[str]) -> None:
+    for tag in tags:
+        connection.execute(
+            """
+            insert into dataset_tags (dataset_id, tag)
+            values (%(dataset_id)s, %(tag)s)
+            on conflict do nothing
+            """,
+            {"dataset_id": dataset_id, "tag": tag},
+        )
+
+
+def build_pager(
+    *,
+    page: int,
+    total_items: int,
+    page_size: int,
+) -> dict[str, int | bool]:
+    total_pages = max(1, ceil(total_items / page_size)) if total_items else 1
+    current_page = min(max(page, 1), total_pages)
+    start_item = 0 if total_items == 0 else (current_page - 1) * page_size + 1
+    end_item = min(current_page * page_size, total_items) if total_items else 0
+    return {
+        "page": current_page,
+        "page_size": page_size,
+        "total_items": total_items,
+        "total_pages": total_pages,
+        "start_item": start_item,
+        "end_item": end_item,
+        "has_prev": current_page > 1,
+        "has_next": current_page < total_pages,
+        "prev_page": current_page - 1,
+        "next_page": current_page + 1,
+    }
+
+
 def admin_context(
     request: Request,
     connection,
@@ -934,17 +1159,37 @@ def admin_context(
     edit_collection: dict | None = None,
     edit_dataset: dict | None = None,
     current_section: str = "catalog",
+    active_tab: str = "list-data",
     selected_collection_id: UUID | None = None,
+    collection_search: str = "",
+    dataset_search: str = "",
+    collection_page: int = 1,
+    dataset_page: int = 1,
 ) -> dict:
+    page_size = 20
+    collections, collection_total = load_admin_collection_page(
+        connection,
+        search=collection_search,
+        page=collection_page,
+        page_size=page_size,
+    )
+    datasets, dataset_total = load_admin_dataset_page(
+        connection,
+        collection_id=selected_collection_id,
+        search=dataset_search,
+        page=dataset_page,
+        page_size=page_size,
+    )
     return {
         "request": request,
         "message": message,
         "error": error,
         "plaintext_token": plaintext_token,
         "current_section": current_section,
+        "active_tab": active_tab,
         "tokens": load_admin_token_rows(connection),
-        "collections": load_admin_collection_rows(connection),
-        "datasets": load_admin_dataset_rows(connection, selected_collection_id),
+        "collections": collections,
+        "datasets": datasets,
         "dataset_choices": load_dataset_choices(connection),
         "collection_choices": load_collection_choices(connection),
         "bucket_names": load_bucket_names(s3_client),
@@ -952,6 +1197,18 @@ def admin_context(
         "edit_collection": edit_collection,
         "edit_dataset": edit_dataset,
         "selected_collection_id": str(selected_collection_id) if selected_collection_id else "",
+        "collection_search": collection_search,
+        "dataset_search": dataset_search,
+        "collection_pager": build_pager(
+            page=collection_page,
+            total_items=collection_total,
+            page_size=page_size,
+        ),
+        "dataset_pager": build_pager(
+            page=dataset_page,
+            total_items=dataset_total,
+            page_size=page_size,
+        ),
     }
 
 
@@ -1142,6 +1399,11 @@ def admin_catalog(
     selected_collection_id = parse_optional_uuid(
         request.query_params.get("collection_id")
     )
+    active_tab = str(request.query_params.get("tab", "list-data")).strip() or "list-data"
+    collection_search = str(request.query_params.get("collection_q", "")).strip()
+    dataset_search = str(request.query_params.get("dataset_q", "")).strip()
+    collection_page = parse_page(request.query_params.get("collection_page"))
+    dataset_page = parse_page(request.query_params.get("dataset_page"))
     return templates.TemplateResponse(
         request,
         "admin_catalog.html",
@@ -1150,7 +1412,12 @@ def admin_catalog(
             connection,
             s3_client,
             current_section="catalog",
+            active_tab=active_tab,
             selected_collection_id=selected_collection_id,
+            collection_search=collection_search,
+            dataset_search=dataset_search,
+            collection_page=collection_page,
+            dataset_page=dataset_page,
         ),
     )
 
@@ -1173,6 +1440,7 @@ def admin_tokens_page(
             connection,
             s3_client,
             current_section="tokens",
+            active_tab="tokens",
         ),
     )
 
@@ -1201,21 +1469,21 @@ async def admin_create_token(
         return templates.TemplateResponse(
             request,
             "admin_tokens.html",
-            admin_context(request, connection, s3_client, error="Token label is required.", current_section="tokens"),
+            admin_context(request, connection, s3_client, error="Token label is required.", current_section="tokens", active_tab="tokens"),
             status_code=status.HTTP_400_BAD_REQUEST,
         )
     if grant_mode == "bucket" and not bucket:
         return templates.TemplateResponse(
             request,
             "admin_tokens.html",
-            admin_context(request, connection, s3_client, error="Bucket grants require a bucket name.", current_section="tokens"),
+            admin_context(request, connection, s3_client, error="Bucket grants require a bucket name.", current_section="tokens", active_tab="tokens"),
             status_code=status.HTTP_400_BAD_REQUEST,
         )
     if grant_mode == "dataset" and not dataset_id:
         return templates.TemplateResponse(
             request,
             "admin_tokens.html",
-            admin_context(request, connection, s3_client, error="Dataset grants require a dataset selection.", current_section="tokens"),
+            admin_context(request, connection, s3_client, error="Dataset grants require a dataset selection.", current_section="tokens", active_tab="tokens"),
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -1244,6 +1512,7 @@ async def admin_create_token(
                 s3_client,
                 error="That generated token already exists. Try again or use a different prefix.",
                 current_section="tokens",
+                active_tab="tokens",
             ),
             status_code=status.HTTP_400_BAD_REQUEST,
         )
@@ -1299,6 +1568,7 @@ async def admin_create_token(
             message="Token created. Copy the plaintext token now; it will not be shown again.",
             plaintext_token=plaintext_token,
             current_section="tokens",
+            active_tab="tokens",
         ),
     )
 
@@ -1348,7 +1618,7 @@ async def admin_create_collection(
         return templates.TemplateResponse(
             request,
             "admin_catalog.html",
-            admin_context(request, connection, s3_client, error="Collection title and slug are required.", current_section="catalog"),
+            admin_context(request, connection, s3_client, error="Collection title and slug are required.", current_section="catalog", active_tab="create-collection"),
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -1375,7 +1645,7 @@ async def admin_create_collection(
     return templates.TemplateResponse(
         request,
         "admin_catalog.html",
-        admin_context(request, connection, s3_client, message="Collection created.", current_section="catalog"),
+        admin_context(request, connection, s3_client, message="Collection created.", current_section="catalog", active_tab="create-collection"),
     )
 
 
@@ -1395,7 +1665,7 @@ def admin_edit_collection_page(
     return templates.TemplateResponse(
         request,
         "admin_collection_edit.html",
-        admin_context(request, connection, s3_client, edit_collection=edit_collection),
+        admin_context(request, connection, s3_client, edit_collection=edit_collection, active_tab="create-collection"),
         
     )
 
@@ -1459,6 +1729,7 @@ async def admin_update_collection(
             message="Collection updated.",
             edit_collection=edit_collection,
             current_section="catalog",
+            active_tab="create-collection",
         ),
     )
 
@@ -1480,14 +1751,14 @@ async def admin_create_dataset(
         return templates.TemplateResponse(
             request,
             "admin_catalog.html",
-            admin_context(request, connection, s3_client, error="Dataset title and slug are required.", current_section="catalog"),
+            admin_context(request, connection, s3_client, error="Dataset title and slug are required.", current_section="catalog", active_tab="import-data"),
             status_code=status.HTTP_400_BAD_REQUEST,
         )
     if not str(form.get("storage_bucket", "")).strip() or not str(form.get("storage_key", "")).strip():
         return templates.TemplateResponse(
             request,
             "admin_catalog.html",
-            admin_context(request, connection, s3_client, error="Dataset bucket and object key are required.", current_section="catalog"),
+            admin_context(request, connection, s3_client, error="Dataset bucket and object key are required.", current_section="catalog", active_tab="import-data"),
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -1527,15 +1798,7 @@ async def admin_create_dataset(
             },
         ).fetchone()
 
-        for tag in tags:
-            connection.execute(
-                """
-                insert into dataset_tags (dataset_id, tag)
-                values (%(dataset_id)s, %(tag)s)
-                on conflict do nothing
-                """,
-                {"dataset_id": str(row["id"]), "tag": tag},
-            )
+        insert_dataset_tags(connection, str(row["id"]), tags)
 
         connection.commit()
     except Exception:
@@ -1545,7 +1808,168 @@ async def admin_create_dataset(
     return templates.TemplateResponse(
         request,
         "admin_catalog.html",
-        admin_context(request, connection, s3_client, message="Dataset created.", current_section="catalog"),
+        admin_context(request, connection, s3_client, message="Dataset created.", current_section="catalog", active_tab="import-data"),
+    )
+
+
+@app.post("/admin/datasets/import", response_class=HTMLResponse)
+async def admin_import_datasets(
+    request: Request,
+    connection=Depends(get_db_connection),
+    s3_client: BaseClient = Depends(get_s3_client),
+    settings: Settings = Depends(get_settings),
+):
+    if not admin_authenticated(request, settings):
+        return admin_login_redirect()
+
+    form = await request.form()
+    collection_id = parse_optional_uuid(str(form.get("collection_id", "")).strip() or None)
+    bucket = str(form.get("storage_bucket", "")).strip()
+    prefix = str(form.get("storage_prefix", "")).strip()
+    visibility = str(form.get("visibility", "listed")).strip() or "listed"
+    selected_collection_id = collection_id
+
+    if not collection_id:
+        return templates.TemplateResponse(
+            request,
+            "admin_catalog.html",
+            admin_context(
+                request,
+                connection,
+                s3_client,
+                error="Bulk import requires a target collection.",
+                current_section="catalog",
+                active_tab="import-data",
+                selected_collection_id=selected_collection_id,
+            ),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    if not bucket:
+        return templates.TemplateResponse(
+            request,
+            "admin_catalog.html",
+            admin_context(
+                request,
+                connection,
+                s3_client,
+                error="Bulk import requires a bucket name.",
+                current_section="catalog",
+                active_tab="import-data",
+                selected_collection_id=selected_collection_id,
+            ),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        objects = load_bucket_objects(s3_client, bucket_name=bucket, prefix=prefix or None)
+    except ClientError as exc:
+        return templates.TemplateResponse(
+            request,
+            "admin_catalog.html",
+            admin_context(
+                request,
+                connection,
+                s3_client,
+                error=f"Unable to read objects from {bucket}.",
+                current_section="catalog",
+                active_tab="import-data",
+                selected_collection_id=selected_collection_id,
+            ),
+            status_code=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    if not objects:
+        return templates.TemplateResponse(
+            request,
+            "admin_catalog.html",
+            admin_context(
+                request,
+                connection,
+                s3_client,
+                error="No objects matched that bucket/prefix.",
+                current_section="catalog",
+                active_tab="import-data",
+                selected_collection_id=selected_collection_id,
+            ),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    existing_rows = connection.execute(
+        """
+        select storage_bucket, storage_key, slug
+        from datasets
+        """
+    ).fetchall()
+    existing_keys = {
+        (row["storage_bucket"], row["storage_key"])
+        for row in existing_rows
+        if row["storage_bucket"] and row["storage_key"]
+    }
+    existing_slugs = {row["slug"] for row in existing_rows if row["slug"]}
+
+    imported = 0
+    skipped = 0
+
+    try:
+        for sort_order, obj in enumerate(objects, start=1):
+            key = str(obj["key"])
+            if (bucket, key) in existing_keys:
+                skipped += 1
+                continue
+
+            title = object_title_from_key(key)
+            slug = build_unique_slug(slugify(title), existing_slugs)
+            connection.execute(
+                """
+                insert into datasets (
+                  collection_id, slug, title, summary, classification, visibility,
+                  storage_bucket, storage_key, file_size_bytes, sort_order, published_at
+                )
+                values (
+                  %(collection_id)s, %(slug)s, %(title)s, null, 'confidential', %(visibility)s,
+                  %(storage_bucket)s, %(storage_key)s, %(file_size_bytes)s, %(sort_order)s, now()
+                )
+                """,
+                {
+                    "collection_id": str(collection_id),
+                    "slug": slug,
+                    "title": title,
+                    "visibility": visibility,
+                    "storage_bucket": bucket,
+                    "storage_key": key,
+                    "file_size_bytes": int(obj["file_size_bytes"]),
+                    "sort_order": sort_order,
+                },
+            )
+            imported += 1
+            existing_keys.add((bucket, key))
+
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+    message = f"Imported {imported} dataset"
+    if imported != 1:
+        message += "s"
+    if skipped:
+        message += f"; skipped {skipped} already-cataloged object"
+        if skipped != 1:
+            message += "s"
+    message += "."
+
+    return templates.TemplateResponse(
+        request,
+        "admin_catalog.html",
+        admin_context(
+            request,
+            connection,
+            s3_client,
+            message=message,
+            current_section="catalog",
+            active_tab="import-data",
+            selected_collection_id=selected_collection_id,
+        ),
     )
 
 
@@ -1565,7 +1989,7 @@ def admin_edit_dataset_page(
     return templates.TemplateResponse(
         request,
         "admin_dataset_edit.html",
-        admin_context(request, connection, s3_client, edit_dataset=edit_dataset),
+        admin_context(request, connection, s3_client, edit_dataset=edit_dataset, active_tab="list-data"),
     )
 
 
@@ -1651,5 +2075,6 @@ async def admin_update_dataset(
             message="Dataset updated.",
             edit_dataset=edit_dataset,
             current_section="catalog",
+            active_tab="list-data",
         ),
     )
