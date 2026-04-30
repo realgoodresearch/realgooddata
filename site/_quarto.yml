@@ -12,13 +12,12 @@ website:
     right:
       - href: https://data.realgoodresearch.com
         text: Data
-      - href: https://docs.realgoodresearch.com
-        text: Docs
+      # - href: https://docs.realgoodresearch.com
+      #   text: Docs
       - href: https://github.com/realgoodresearch
         target: _blank
         text: Code
       - href: https://realgoodresearch.com
-        target: _blank
         text: Home
 
 format:

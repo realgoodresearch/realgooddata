@@ -1786,7 +1786,7 @@ async def admin_create_collection(
         )
 
     try:
-        connection.execute(
+        row = connection.execute(
             """
             insert into collections (title, slug, summary, published_at)
             values (%(title)s, %(slug)s, %(summary)s, coalesce(%(published_at)s, now()))

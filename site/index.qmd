@@ -1,6 +1,6 @@
 ---
 title: "Real Good Data"
-subtitle: "Sharing our data to help you do good things better."
+subtitle: "Sharing our data to help you do good things."
 title-block: false
 ---
 
