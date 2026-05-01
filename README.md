@@ -26,7 +26,8 @@ keeps all services together and adds:
 
 ## Production Quick Start
 
-1. On a fresh Ubuntu cloud host, install the system dependencies:
+1. On a fresh Ubuntu cloud host, install the system dependencies, including
+   Docker and Quarto:
 
 ```bash
 sudo ./scripts/install-ubuntu-dependencies.sh --configure-firewall
@@ -432,5 +433,5 @@ quarto render
 docker compose -f ../docker-compose.yml up -d --force-recreate nginx
 ```
 
-This environment does not have `quarto` installed, so I could not run the render
-here.
+On a production Ubuntu host bootstrapped with
+`scripts/install-ubuntu-dependencies.sh`, Quarto is installed by default.

@@ -6,14 +6,15 @@ usage() {
 Usage: scripts/install-ubuntu-dependencies.sh [options]
 
 Installs the Linux packages needed to run the production Docker Compose stack on
-an Ubuntu VM, including Docker Engine, the Docker Compose plugin, git, and small
-operator utilities.
+an Ubuntu VM, including Docker Engine, the Docker Compose plugin, Quarto, git,
+and small operator utilities.
 
 Options:
   --hostname NAME        Set the VM hostname. Defaults to realgooddata.
   --configure-firewall   Enable UFW and allow SSH, HTTP, and HTTPS.
   --skip-docker-group    Do not add a non-root user to the docker group.
   --skip-hostname        Do not change the VM hostname.
+  --skip-quarto          Do not install Quarto.
   --user USER            Add USER to the docker group instead of the sudo user.
   -h, --help             Show this help text.
 
@@ -26,6 +27,7 @@ EOF
 CONFIGURE_FIREWALL=0
 SKIP_DOCKER_GROUP=0
 SKIP_HOSTNAME=0
+SKIP_QUARTO=0
 TARGET_HOSTNAME="realgooddata"
 TARGET_USER="${SUDO_USER:-}"
 
@@ -75,6 +77,9 @@ while [ "$#" -gt 0 ]; do
       ;;
     --skip-hostname)
       SKIP_HOSTNAME=1
+      ;;
+    --skip-quarto)
+      SKIP_QUARTO=1
       ;;
     --user)
       shift
@@ -157,6 +162,65 @@ configure_hostname() {
   rm -f "${HOSTS_FILE}"
 }
 
+install_quarto() {
+  if [ "${SKIP_QUARTO}" -eq 1 ]; then
+    echo "Skipping Quarto installation."
+    return
+  fi
+
+  case "$(dpkg --print-architecture)" in
+    amd64)
+      QUARTO_ASSET_SUFFIX="linux-amd64.deb"
+      ;;
+    arm64)
+      QUARTO_ASSET_SUFFIX="linux-arm64.deb"
+      ;;
+    *)
+      echo "Quarto installer is not configured for architecture: $(dpkg --print-architecture)" >&2
+      exit 1
+      ;;
+  esac
+
+  echo "Resolving latest Quarto release..."
+  QUARTO_TMP_DIR="$(mktemp -d)"
+  QUARTO_METADATA="${QUARTO_TMP_DIR}/download.json"
+  curl -fsSL https://quarto.org/docs/download/_download.json -o "${QUARTO_METADATA}"
+
+  QUARTO_VERSION="$(jq -r '.version' "${QUARTO_METADATA}")"
+  QUARTO_ASSET_NAME="$(jq -r --arg suffix "${QUARTO_ASSET_SUFFIX}" '.assets[] | select(.name | endswith($suffix)) | .name' "${QUARTO_METADATA}")"
+  QUARTO_DOWNLOAD_URL="$(jq -r --arg name "${QUARTO_ASSET_NAME}" '.assets[] | select(.name == $name) | .download_url' "${QUARTO_METADATA}")"
+  QUARTO_CHECKSUM="$(jq -r --arg name "${QUARTO_ASSET_NAME}" '.assets[] | select(.name == $name) | .checksum' "${QUARTO_METADATA}")"
+
+  if [ -z "${QUARTO_VERSION}" ] || [ "${QUARTO_VERSION}" = "null" ] \
+    || [ -z "${QUARTO_ASSET_NAME}" ] || [ "${QUARTO_ASSET_NAME}" = "null" ] \
+    || [ -z "${QUARTO_DOWNLOAD_URL}" ] || [ "${QUARTO_DOWNLOAD_URL}" = "null" ] \
+    || [ -z "${QUARTO_CHECKSUM}" ] || [ "${QUARTO_CHECKSUM}" = "null" ]; then
+    rm -rf "${QUARTO_TMP_DIR}"
+    echo "Could not resolve a Quarto .deb download from Quarto metadata." >&2
+    exit 1
+  fi
+
+  if command -v quarto >/dev/null 2>&1; then
+    INSTALLED_QUARTO_VERSION="$(quarto --version 2>/dev/null || true)"
+    if [ "${INSTALLED_QUARTO_VERSION}" = "${QUARTO_VERSION}" ]; then
+      echo "Quarto ${QUARTO_VERSION} is already installed."
+      rm -rf "${QUARTO_TMP_DIR}"
+      return
+    fi
+  fi
+
+  QUARTO_DEB="${QUARTO_TMP_DIR}/${QUARTO_ASSET_NAME}"
+  echo "Downloading Quarto ${QUARTO_VERSION}..."
+  curl -fsSL "${QUARTO_DOWNLOAD_URL}" -o "${QUARTO_DEB}"
+
+  echo "Verifying Quarto checksum..."
+  printf '%s  %s\n' "${QUARTO_CHECKSUM}" "${QUARTO_DEB}" | sha256sum -c -
+
+  echo "Installing Quarto ${QUARTO_VERSION}..."
+  run apt-get install -y "${QUARTO_DEB}"
+  rm -rf "${QUARTO_TMP_DIR}"
+}
+
 if [ ! -r /etc/os-release ]; then
   echo "Cannot detect the operating system; /etc/os-release is missing." >&2
   exit 1
@@ -191,6 +255,8 @@ run apt-get install -y \
   ufw \
   unattended-upgrades \
   unzip
+
+install_quarto
 
 CONFLICTING_PACKAGES=""
 for package in docker.io docker-compose docker-compose-v2 docker-doc podman-docker containerd runc; do
@@ -283,5 +349,10 @@ echo "Verifying Docker installation..."
 run docker info >/dev/null
 docker --version
 docker compose version
+if command -v quarto >/dev/null 2>&1; then
+  quarto --version
+else
+  echo "Quarto is not installed."
+fi
 
 echo "Ubuntu dependency installation complete."
