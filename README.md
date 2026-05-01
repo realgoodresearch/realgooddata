@@ -9,33 +9,53 @@ and sample credentials references with values appropriate for that environment.
 
 ## Services
 
-- `minio`: Private S3-compatible object storage
-- `postgres`: Catalog and token-grant database
+The default [docker-compose.yml](/home/doug/git/realgoodresearch/realgooddata/docker-compose.yml:1)
+is the production cloud stack:
+
+- `postgres`: Catalog and token-grant database, running on the cloud host
 - `broker-api`: FastAPI service that lists datasets and returns policy-aware
   download decisions
 - `nginx`: TLS gateway for the frontend and reverse proxy for multiple subdomains
 - `certbot`: Automated Let's Encrypt renewal sidecar
 
-## Quick Start
+The local development stack in
+[docker-compose.local.yml](/home/doug/git/realgoodresearch/realgooddata/docker-compose.local.yml:1)
+keeps all services together and adds:
 
-1. Copy `.env.example` to `.env` and replace the MinIO credentials.
-   Set `MINIO_DATA_PATH` to the host path where MinIO should store data, ideally
-   your RAID-backed mount such as `/data/raid/minio`.
-   Also set Postgres credentials, `POSTGRES_DATA_PATH`, `POSTGRES_BIND_ADDRESS`,
-   and `MINIO_BIND_ADDRESS`.
-2. Start the stack:
+- `minio`: Private S3-compatible object storage
+
+## Production Quick Start
+
+1. On a fresh Ubuntu cloud host, install the system dependencies:
+
+```bash
+sudo ./scripts/install-ubuntu-dependencies.sh --configure-firewall
+```
+
+The script sets the VM hostname to `realgooddata` by default. Use
+`--hostname NAME` or `--skip-hostname` if you need different behavior.
+
+2. Copy `.env.example` to `.env`.
+3. Set Postgres credentials, admin credentials, and the cloud Postgres data path.
+4. Set `MINIO_ENDPOINT` to the local MinIO API origin that the cloud broker can
+   reach, usually `https://your-minio-origin.example.com:9000`.
+5. Set `MINIO_ACCESS_KEY` and `MINIO_SECRET_KEY` to a dedicated MinIO service
+   account for the broker, not the MinIO root account.
+6. On the local storage server, run MinIO and allow inbound `9000` only from the
+   cloud host's static IP address.
+7. Start the cloud stack:
 
 ```bash
 docker compose up -d --build
 ```
 
-3. Request the first certificate for `data.realgoodresearch.com`:
+8. Request the first certificate for `data.realgoodresearch.com`:
 
 ```bash
 ./scripts/request-certificate.sh data.realgoodresearch.com
 ```
 
-4. Reload Nginx once the certificate is issued:
+9. Reload Nginx once the certificate is issued:
 
 ```bash
 docker compose restart nginx
@@ -43,6 +63,20 @@ docker compose restart nginx
 
 The `certbot` container will renew existing certificates automatically. The Nginx
 container also watches the certificate directory and reloads itself after renewals.
+
+## Local Development Quick Start
+
+Use the local compose file when you want Postgres, MinIO, broker, Nginx, and
+certbot on one machine:
+
+```bash
+cp .env.local.example .env
+docker compose -f docker-compose.local.yml up -d --build
+```
+
+The local broker uses the local MinIO root credentials for convenience. Production
+should use the dedicated `MINIO_ACCESS_KEY` and `MINIO_SECRET_KEY` variables in
+`.env.example`.
 
 ## Admin Panel
 
@@ -73,6 +107,8 @@ Then rebuild the broker and restart Nginx:
 docker compose up -d --build broker-api nginx
 ```
 
+For the local development stack, add `-f docker-compose.local.yml` to the command.
+
 The first admin release supports:
 
 - env-based login at `/admin/login`
@@ -89,34 +125,68 @@ Bulk import behavior:
 - title and slug are auto-generated from the object filename unless a close `storage_key` match is found, in which case title and summary are copied from the existing dataset
 - existing catalog rows for the same bucket/object key are skipped
 
-## Storage Location
+## MinIO Origin Storage
 
-MinIO stores object data on the host path defined by `MINIO_DATA_PATH` in `.env`.
-That path is mounted into the container as `/data`.
+In production, MinIO runs on the local/internal storage server, not on the cloud
+host. The broker reaches it through `MINIO_ENDPOINT`.
+
+On the local storage server, MinIO stores object data on the host path defined by
+`MINIO_DATA_PATH`. That path is mounted into the container as `/data`.
 
 Example:
 
 ```env
 MINIO_DATA_PATH=/data/raid/minio
-MINIO_BIND_ADDRESS=10.8.0.5
+MINIO_BIND_ADDRESS=0.0.0.0
 MINIO_API_PORT=9000
 MINIO_CONSOLE_PORT=9001
-POSTGRES_DATA_PATH=/data/raid/postgres
-POSTGRES_BIND_ADDRESS=10.8.0.5
-POSTGRES_PORT=5432
+```
+
+Forward or expose only the MinIO API port, `9000`, and firewall it so the only
+allowed source is the cloud host's static IP address. Keep the MinIO console,
+`9001`, local-only or reachable through an SSH tunnel.
+
+If you want to run just the production MinIO origin from this repo on the local
+storage server, use the local compose file and start only `minio`:
+
+```bash
+cp .env.local.example .env
+docker compose -f docker-compose.local.yml up -d minio
+```
+
+For local development, keep MinIO bound to loopback:
+
+```env
+MINIO_BIND_ADDRESS=127.0.0.1
+MINIO_API_PORT=9000
+MINIO_CONSOLE_PORT=9001
 ```
 
 `MINIO_BIND_ADDRESS` controls which host interface exposes the MinIO S3 API and
-console. Set it to a VPN or LAN IP if you want to use the MinIO web console
-without an SSH tunnel.
+console in the local stack.
 
-`POSTGRES_BIND_ADDRESS` controls which host interface exposes PostgreSQL. Use a
-VPN or LAN IP if you want DBeaver access from that network only. Keep it at
-`127.0.0.1` if you only want local host access.
+## Postgres Storage
+
+In production, Postgres runs on the cloud host. Its data directory is controlled
+by `POSTGRES_DATA_PATH` in `.env`.
+
+Example:
+
+```env
+POSTGRES_DATA_PATH=/data/raid/postgres
+POSTGRES_BIND_ADDRESS=127.0.0.1
+POSTGRES_PORT=5432
+POSTGRES_SERVICE_PORT=5432
+```
+
+`POSTGRES_BIND_ADDRESS` controls which host interface exposes PostgreSQL on the
+cloud host. Keep it at `127.0.0.1` unless you have a specific reason to expose
+Postgres beyond the host.
 
 Example DBeaver connection settings:
 
-- Host: the server's LAN or VPN IP that matches `POSTGRES_BIND_ADDRESS`
+- Host: `127.0.0.1` through an SSH tunnel to the cloud host, or the host/interface
+  that matches `POSTGRES_BIND_ADDRESS`
 - Port: `POSTGRES_PORT`
 - Database: `POSTGRES_DB`
 - Username: `POSTGRES_USER`
@@ -236,6 +306,9 @@ On first startup, Postgres should run the SQL files in `postgres/initdb/`.
 ```bash
 docker compose up -d --build broker-api
 ```
+
+For the local development stack, add `-f docker-compose.local.yml` to each
+`docker compose` command in this section.
 
 ## API
 
