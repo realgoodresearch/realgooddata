@@ -39,8 +39,9 @@ The script sets the VM hostname to `realgooddata` by default. Use
 3. Set Postgres credentials, admin credentials, and the cloud Postgres data path.
 4. Set `MINIO_ENDPOINT` to the local MinIO API origin that the cloud broker can
    reach, usually `https://your-minio-origin.example.com:9000`.
-5. Set `MINIO_ACCESS_KEY` and `MINIO_SECRET_KEY` to a dedicated MinIO service
-   account for the broker, not the MinIO root account.
+5. Create a dedicated MinIO broker user using the policy in
+   [minio/policies/broker-readonly.json](/home/doug/git/realgoodresearch/realgooddata/minio/policies/broker-readonly.json:1),
+   then set `MINIO_ACCESS_KEY` and `MINIO_SECRET_KEY` to that user's credentials.
 6. On the local storage server, run MinIO and allow inbound `9000` only from the
    cloud host's static IP address.
 7. Start the cloud stack:
@@ -164,6 +165,48 @@ MINIO_CONSOLE_PORT=9001
 
 `MINIO_BIND_ADDRESS` controls which host interface exposes the MinIO S3 API and
 console in the local stack.
+
+## MinIO Broker Credentials
+
+Do not use the MinIO root credentials in the cloud broker `.env`. Create a
+dedicated broker user with a read-only policy instead.
+
+On the local storage server, configure `mc` with the MinIO root credentials from
+that server's `.env`:
+
+```bash
+mc alias set local http://127.0.0.1:9000 'your-minio-root-user' 'your-minio-root-password'
+```
+
+Create or update the broker read-only policy from this repo:
+
+```bash
+mc admin policy create local broker-readonly minio/policies/broker-readonly.json
+```
+
+Create the broker user, attach the policy, and print the cloud `.env` values:
+
+```bash
+BROKER_SECRET="$(openssl rand -base64 36)"
+
+mc admin user add local broker-service-account "$BROKER_SECRET"
+mc admin policy attach local broker-readonly --user broker-service-account
+
+printf 'MINIO_ACCESS_KEY=%s\n' 'broker-service-account'
+printf 'MINIO_SECRET_KEY=%s\n' "$BROKER_SECRET"
+```
+
+Then set those values on the cloud host:
+
+```env
+MINIO_ACCESS_KEY=broker-service-account
+MINIO_SECRET_KEY=replace-with-the-generated-secret
+```
+
+The default broker policy can list buckets and read objects across the MinIO
+deployment. If the portal should only serve specific buckets, replace the
+wildcard bucket resources in the policy with explicit bucket ARNs before creating
+or updating it.
 
 ## Postgres Storage
 
