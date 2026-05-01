@@ -84,9 +84,9 @@ The first admin release supports:
 Bulk import behavior:
 
 - target collection is required
-- imported rows default to `classification=confidential`
+- imported rows use the selected `classification` and `visibility`
 - `storage_bucket`, `storage_key`, and `file_size_bytes` are populated from MinIO
-- title and slug are auto-generated from the object filename
+- title and slug are auto-generated from the object filename unless a close `storage_key` match is found, in which case title and summary are copied from the existing dataset
 - existing catalog rows for the same bucket/object key are skipped
 
 ## Storage Location
@@ -158,7 +158,7 @@ Token grant rules:
 Collections are editorial containers only. Classification stays on each dataset,
 so a single collection can mix public, restricted, and confidential files.
 
-The database bootstrap files live in [postgres/initdb](/home/doug/git/realgoodresearch/sysadmin/data-portal/postgres/initdb:1). On a fresh Postgres data directory they already include the current schema, including collection tags and dataset roles (`data`, `documentation`, `visuals`). A clean initialization creates:
+The database bootstrap files live in [postgres/initdb](/home/doug/git/realgoodresearch/sysadmin/data-portal/postgres/initdb:1). On a fresh Postgres data directory they already include the current schema, including collection tags and dataset roles (`data`, `documentation`, `visuals`, `GIS`). A clean initialization creates:
 
 - `collections`
 - `collection_tags`

@@ -49,7 +49,7 @@
         <label>
           <span>Role</span>
           <select name="dataset_role">
-            {% for option in ['data', 'documentation', 'visuals'] %}
+            {% for option in ['data', 'documentation', 'visuals', 'GIS'] %}
             <option value="{{ option }}" {% if edit_dataset.dataset_role == option %}selected{% endif %}>{{ option }}</option>
             {% endfor %}
           </select>

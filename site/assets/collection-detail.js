@@ -140,6 +140,7 @@ function renderCollection() {
         <div>
           <p class="eyebrow">Collection</p>
           <h1 class="hero-title">${escapeHtml(collection.title)}</h1>
+          <div class="slug">Published: ${escapeHtml(published)}</div>
         </div>
         <button
           id="detail-token-trigger"
@@ -153,14 +154,11 @@ function renderCollection() {
       <p class="hero-copy">${escapeHtml(collection.summary || "No summary provided.")}</p>
       ${tagsHtml}
       <div class="meta">
-        <span>${escapeHtml(published)}</span>
         <span>${collection.counts.total} files</span>
-        <span>${collection.counts.downloadable} currently downloadable</span>
-      </div>
-      <div class="count-list">
         <span class="count-pill public">${collection.counts.public} public</span>
         <span class="count-pill restricted">${collection.counts.restricted} restricted</span>
         <span class="count-pill confidential">${collection.counts.confidential} confidential</span>
+        <span>${collection.counts.downloadable} currently downloadable</span>
       </div>
       <div class="detail-hero-actions">
         <button
@@ -227,14 +225,25 @@ function compareCollectionItems(left, right) {
   return String(left.title || "").localeCompare(String(right.title || ""));
 }
 
+function normalizedDatasetRole(role) {
+  return String(role || "").trim().toLowerCase();
+}
+
 function datasetRoleRank(role) {
-  if (role === "documentation") {
+  const normalizedRole = normalizedDatasetRole(role);
+  if (normalizedRole === "documentation") {
     return 0;
   }
-  if (role === "visuals") {
+  if (normalizedRole === "visuals") {
     return 1;
   }
-  return 2;
+  if (normalizedRole === "data") {
+    return 2;
+  }
+  if (normalizedRole === "gis") {
+    return 3;
+  }
+  return 4;
 }
 
 function classificationRank(classification) {
@@ -252,7 +261,8 @@ function classificationRank(classification) {
 
 function renderDatasetRow(item) {
   const roleLabel = datasetRoleLabel(item.dataset_role);
-  const roleBadge = `<span class="badge role-badge role-${escapeHtml(item.dataset_role || "data")}">${escapeHtml(roleLabel)}</span>`;
+  const roleClass = normalizedDatasetRole(item.dataset_role) || "data";
+  const roleBadge = `<span class="badge role-badge role-${escapeHtml(roleClass)}">${escapeHtml(roleLabel)}</span>`;
   const classificationBadge = `<span class="badge ${escapeHtml(item.classification)}">${escapeHtml(item.classification)}</span>`;
   const actionButtons = item.classification === "confidential"
     ? ""
@@ -308,11 +318,15 @@ function renderDatasetRow(item) {
 }
 
 function datasetRoleLabel(role) {
-  if (role === "documentation") {
+  const normalizedRole = normalizedDatasetRole(role);
+  if (normalizedRole === "documentation") {
     return "Documentation";
   }
-  if (role === "visuals") {
+  if (normalizedRole === "visuals") {
     return "Visuals";
+  }
+  if (normalizedRole === "gis") {
+    return "GIS";
   }
   return "Data";
 }

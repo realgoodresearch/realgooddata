@@ -274,6 +274,7 @@ button:disabled {
 .meta {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 14px;
   margin-top: 14px;
   font-size: 0.92rem;
@@ -519,6 +520,11 @@ button:disabled {
 .role-data {
   background: #f3f5f6;
   color: $text-muted;
+}
+
+.role-gis {
+  background: #edf7ef;
+  color: #24593a;
 }
 
 .table-actions {

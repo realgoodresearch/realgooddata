@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Admin Catalog</title>
   <link rel="stylesheet" href="/admin/static/admin.css?v=20260429-1">
+  <script src="/admin/static/admin.js?v=20260430-1" defer></script>
 </head>
 
 <body>
@@ -57,11 +58,14 @@
           </label>
           <input type="hidden" name="tab" value="list-collections">
           <input type="hidden" name="dataset_q" value="{{ dataset_search }}">
+          <input type="hidden" name="classification" value="{{ dataset_classification }}">
+          <input type="hidden" name="dataset_role" value="{{ dataset_role }}">
+          <input type="hidden" name="dataset_page_size" value="{{ dataset_page_size }}">
           <input type="hidden" name="collection_id" value="{{ selected_collection_id }}">
           <input type="hidden" name="dataset_page" value="{{ dataset_pager.page }}">
           <div class="actions inline-actions">
             <button type="submit" class="button-secondary">Search</button>
-            <a href="{{ request.url.include_query_params(tab='list-collections', collection_q='', collection_page=1, dataset_q=dataset_search, collection_id=selected_collection_id, dataset_page=dataset_pager.page) }}" class="button-link">Clear</a>
+            <a href="{{ request.url.include_query_params(tab='list-collections', collection_q='', collection_page=1, dataset_q=dataset_search, classification=dataset_classification, dataset_role=dataset_role, dataset_page_size=dataset_page_size, collection_id=selected_collection_id, dataset_page=dataset_pager.page) }}" class="button-link">Clear</a>
           </div>
         </form>
         <table class="admin-table">
@@ -90,11 +94,11 @@
           <span class="muted">Showing {{ collection_pager.start_item }}-{{ collection_pager.end_item }} of {{ collection_pager.total_items }} collections</span>
           <div class="pager">
             {% if collection_pager.has_prev %}
-            <a href="{{ request.url.include_query_params(tab='list-collections', collection_page=collection_pager.prev_page, collection_q=collection_search, dataset_q=dataset_search, collection_id=selected_collection_id, dataset_page=dataset_pager.page) }}" class="button-link">Previous</a>
+            <a href="{{ request.url.include_query_params(tab='list-collections', collection_page=collection_pager.prev_page, collection_q=collection_search, dataset_q=dataset_search, classification=dataset_classification, dataset_role=dataset_role, dataset_page_size=dataset_page_size, collection_id=selected_collection_id, dataset_page=dataset_pager.page) }}" class="button-link">Previous</a>
             {% endif %}
             <span class="pager-status">Page {{ collection_pager.page }} of {{ collection_pager.total_pages }}</span>
             {% if collection_pager.has_next %}
-            <a href="{{ request.url.include_query_params(tab='list-collections', collection_page=collection_pager.next_page, collection_q=collection_search, dataset_q=dataset_search, collection_id=selected_collection_id, dataset_page=dataset_pager.page) }}" class="button-link">Next</a>
+            <a href="{{ request.url.include_query_params(tab='list-collections', collection_page=collection_pager.next_page, collection_q=collection_search, dataset_q=dataset_search, classification=dataset_classification, dataset_role=dataset_role, dataset_page_size=dataset_page_size, collection_id=selected_collection_id, dataset_page=dataset_pager.page) }}" class="button-link">Next</a>
             {% endif %}
           </div>
         </div>
@@ -108,7 +112,9 @@
       <div class="subsection">
         <h3>Bulk Import From Storage</h3>
         <p class="muted">Import every object from a bucket/prefix into a collection. New rows default to
-          <code>classification=confidential</code> and prefill bucket, object key, file size, title, and slug.
+          your selected classification and prefill bucket, object key, file size, title, and slug. When a new
+          object closely matches an existing <code>storage_key</code>, the import will also copy over that row's
+          title and summary.
         </p>
         <form method="post" action="/admin/datasets/import" class="form-grid form-stack">
           <input type="hidden" name="tab" value="import-data">
@@ -124,6 +130,13 @@
           <label><span>Bucket</span><input type="text" name="storage_bucket" list="bucket-options" required></label><br>
           <label><span>Prefix / folder</span><input type="text" name="storage_prefix"
               placeholder="restricted/partner-alpha/"></label><br>
+          <label><span>Classification</span>
+            <select name="classification">
+              <option value="public">public</option>
+              <option value="restricted">restricted</option>
+              <option value="confidential" selected>confidential</option>
+            </select>
+          </label><br>
           <label><span>Visibility</span>
             <select name="visibility">
               <option value="listed">listed</option>
@@ -153,6 +166,7 @@
               <option value="data" selected>data</option>
               <option value="documentation">documentation</option>
               <option value="visuals">visuals</option>
+              <option value="GIS">GIS</option>
             </select>
           </label><br>
           <label><span>Classification</span>
@@ -191,6 +205,7 @@
     {% if active_tab == 'list-data' %}
     <section class="panel">
       <h2>List Data</h2>
+      {% set can_reorder_datasets = selected_collection_id and not dataset_search and dataset_pager.total_pages == 1 and dataset_pager.total_items > 1 %}
       <div>
         <form method="get" action="/admin/catalog" class="filter-row">
           <label class="search-field">
@@ -208,16 +223,67 @@
               {% endfor %}
             </select>
           </label>
+          <label>
+            <span>Classification</span>
+            <select name="classification">
+              <option value="">All classifications</option>
+              <option value="public" {% if dataset_classification == 'public' %}selected{% endif %}>public</option>
+              <option value="restricted" {% if dataset_classification == 'restricted' %}selected{% endif %}>restricted</option>
+              <option value="confidential" {% if dataset_classification == 'confidential' %}selected{% endif %}>confidential</option>
+            </select>
+          </label>
+          <label>
+            <span>Role</span>
+            <select name="dataset_role">
+              <option value="">All roles</option>
+              <option value="data" {% if dataset_role == 'data' %}selected{% endif %}>data</option>
+              <option value="documentation" {% if dataset_role == 'documentation' %}selected{% endif %}>documentation</option>
+              <option value="visuals" {% if dataset_role == 'visuals' %}selected{% endif %}>visuals</option>
+              <option value="GIS" {% if dataset_role == 'GIS' %}selected{% endif %}>GIS</option>
+            </select>
+          </label>
+          <label>
+            <span>Rows</span>
+            <select name="dataset_page_size">
+              {% for option in [20, 50, 100, 200, 500] %}
+              <option value="{{ option }}" {% if dataset_page_size == option %}selected{% endif %}>{{ option }}</option>
+              {% endfor %}
+            </select>
+          </label>
           <input type="hidden" name="collection_q" value="{{ collection_search }}">
           <div class="actions inline-actions">
             <button type="submit" class="button-secondary">Apply</button>
-            <a href="{{ request.url.include_query_params(tab='list-data', dataset_q='', collection_id='', dataset_page=1, collection_q=collection_search, collection_page=collection_pager.page) }}" class="button-link">Clear</a>
+            <a href="{{ request.url.include_query_params(tab='list-data', dataset_q='', collection_id='', classification='', dataset_role='', dataset_page=1, dataset_page_size=20, collection_q=collection_search, collection_page=collection_pager.page) }}" class="button-link">Clear</a>
           </div>
         </form>
 
-        <table class="admin-table">
+        {% if can_reorder_datasets %}
+        <div class="reorder-toolbar" data-reorder-toolbar>
+          <p class="muted">Drag rows to update dataset order within this collection, then save to rewrite <code>sort_order</code>.</p>
+          <div class="actions inline-actions">
+            <button type="button" class="button-primary" data-save-order disabled>Save order</button>
+            <span class="muted" data-reorder-status>Order unchanged.</span>
+          </div>
+        </div>
+        {% elif selected_collection_id and not dataset_search and dataset_pager.total_pages > 1 %}
+        <p class="muted">Drag reordering is available when the selected collection fits on one page. Narrow the collection or increase ordering manually for larger sets.</p>
+        {% else %}
+        <p class="muted">Select a single collection with no dataset search to drag reorder rows.</p>
+        {% endif %}
+
+        <table
+          class="admin-table {% if can_reorder_datasets %}admin-table-sortable{% endif %}"
+          {% if can_reorder_datasets %}
+          data-sortable-datasets="true"
+          data-collection-id="{{ selected_collection_id }}"
+          data-classification="{{ dataset_classification }}"
+          data-dataset-role="{{ dataset_role }}"
+          data-reorder-url="/admin/datasets-reorder"
+          {% endif %}
+        >
           <thead>
             <tr>
+              <th>Order</th>
               <th>Title</th>
               <th>Collection</th>
               <th>Role</th>
@@ -228,7 +294,11 @@
           </thead>
           <tbody>
             {% for dataset in datasets %}
-            <tr>
+            <tr {% if can_reorder_datasets %}draggable="true" data-dataset-id="{{ dataset.id }}"{% endif %}>
+              <td class="order-cell">
+                {% if can_reorder_datasets %}<span class="drag-handle" aria-hidden="true">::</span>{% endif %}
+                <span data-order-number>{{ loop.index }}</span>
+              </td>
               <td>{{ dataset.title }}</td>
               <td>{{ dataset.collection_title or 'Standalone' }}</td>
               <td>{{ dataset.dataset_role }}</td>
@@ -243,11 +313,11 @@
           <span class="muted">Showing {{ dataset_pager.start_item }}-{{ dataset_pager.end_item }} of {{ dataset_pager.total_items }} datasets</span>
           <div class="pager">
             {% if dataset_pager.has_prev %}
-            <a href="{{ request.url.include_query_params(tab='list-data', dataset_page=dataset_pager.prev_page, dataset_q=dataset_search, collection_id=selected_collection_id, collection_q=collection_search, collection_page=collection_pager.page) }}" class="button-link">Previous</a>
+            <a href="{{ request.url.include_query_params(tab='list-data', dataset_page=dataset_pager.prev_page, dataset_q=dataset_search, collection_id=selected_collection_id, classification=dataset_classification, dataset_role=dataset_role, dataset_page_size=dataset_page_size, collection_q=collection_search, collection_page=collection_pager.page) }}" class="button-link">Previous</a>
             {% endif %}
             <span class="pager-status">Page {{ dataset_pager.page }} of {{ dataset_pager.total_pages }}</span>
             {% if dataset_pager.has_next %}
-            <a href="{{ request.url.include_query_params(tab='list-data', dataset_page=dataset_pager.next_page, dataset_q=dataset_search, collection_id=selected_collection_id, collection_q=collection_search, collection_page=collection_pager.page) }}" class="button-link">Next</a>
+            <a href="{{ request.url.include_query_params(tab='list-data', dataset_page=dataset_pager.next_page, dataset_q=dataset_search, collection_id=selected_collection_id, classification=dataset_classification, dataset_role=dataset_role, dataset_page_size=dataset_page_size, collection_q=collection_search, collection_page=collection_pager.page) }}" class="button-link">Next</a>
             {% endif %}
           </div>
         </div>

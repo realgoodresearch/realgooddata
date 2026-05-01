@@ -25,7 +25,7 @@ create table if not exists datasets (
     slug text unique not null,
     title text not null,
     summary text,
-    dataset_role text not null default 'data' check (dataset_role in ('data', 'documentation', 'visuals')),
+    dataset_role text not null default 'data' check (dataset_role in ('data', 'documentation', 'visuals', 'GIS')),
     classification text not null check (classification in ('public', 'restricted', 'confidential')),
     visibility text not null default 'listed' check (visibility in ('listed', 'hidden')),
     storage_bucket text not null,

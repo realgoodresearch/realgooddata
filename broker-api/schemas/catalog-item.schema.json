@@ -48,7 +48,8 @@
       "enum": [
         "data",
         "documentation",
-        "visuals"
+        "visuals",
+        "GIS"
       ]
     },
     "sort_order": {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from datetime import UTC, datetime
+from difflib import SequenceMatcher
 from functools import lru_cache
 import hashlib
 import hmac
@@ -22,7 +23,7 @@ from botocore.client import BaseClient
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import psycopg
@@ -31,7 +32,7 @@ from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Classification = Literal["public", "restricted", "confidential"]
-DatasetRole = Literal["data", "documentation", "visuals"]
+DatasetRole = Literal["data", "documentation", "visuals", "GIS"]
 AccessReason = Literal[
     "public",
     "token_granted",
@@ -39,6 +40,17 @@ AccessReason = Literal[
     "confidential_no_download",
 ]
 DeliveryMode = Literal["download", "inline"]
+
+SPATIAL_SCALE_PATTERNS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "governorates": (
+        ("gov", "governorate", "governorates"),
+        ("governorate", "governorates", "governorate-level", "governorates-level"),
+    ),
+    "municipalities": (
+        ("mun", "municipality", "municipalities"),
+        ("municipality", "municipalities", "municipality-level", "municipal-level"),
+    ),
+}
 
 
 class Settings(BaseSettings):
@@ -227,6 +239,13 @@ def parse_optional_int(value: str | None) -> int | None:
     return int(value)
 
 
+def parse_page_size(value: str | None, *, default: int = 20) -> int:
+    parsed = parse_optional_int(value)
+    if parsed is None:
+        return default
+    return min(max(parsed, 10), 500)
+
+
 def parse_page(value: str | None) -> int:
     try:
         page = int(value or "1")
@@ -261,6 +280,121 @@ def object_title_from_key(key: str) -> str:
         stem = filename
     title = re.sub(r"[_-]+", " ", stem).strip()
     return title or filename
+
+
+def detect_spatial_scale(text: str | None) -> str | None:
+    normalized_text = re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
+    if not normalized_text:
+        return None
+
+    tokens = set(normalized_text.split())
+    for scale, (key_tokens, _text_variants) in SPATIAL_SCALE_PATTERNS.items():
+        if any(token in tokens for token in key_tokens):
+            return scale
+    return None
+
+
+def rewrite_spatial_scale_terms(
+    text: str | None,
+    source_scale: str | None,
+    target_scale: str | None,
+) -> str | None:
+    if not text or not source_scale or not target_scale or source_scale == target_scale:
+        return text
+
+    source_variants = SPATIAL_SCALE_PATTERNS[source_scale][1]
+    target_singular, target_plural, target_level, _target_alt_level = SPATIAL_SCALE_PATTERNS[target_scale][1]
+    replacement_map = {
+        source_variants[0]: target_singular,
+        source_variants[1]: target_plural,
+        source_variants[2]: target_level,
+    }
+    if len(source_variants) > 3:
+        replacement_map[source_variants[3]] = target_level
+
+    rewritten = str(text)
+    for source_term, target_term in sorted(replacement_map.items(), key=lambda item: len(item[0]), reverse=True):
+        rewritten = re.sub(re.escape(source_term), target_term, rewritten, flags=re.IGNORECASE)
+    return rewritten
+
+
+def normalized_storage_key_parts(key: str) -> tuple[str, str, str]:
+    stripped_key = str(key).strip().lower()
+    filename = object_public_filename(stripped_key)
+    stem, _, _extension = filename.rpartition(".")
+    if not stem:
+        stem = filename
+    normalized_key = re.sub(r"[^a-z0-9]+", " ", stripped_key).strip()
+    normalized_stem = re.sub(r"[^a-z0-9]+", " ", stem).strip()
+    parent = Path(stripped_key).parent.as_posix()
+    normalized_parent = re.sub(r"[^a-z0-9]+", " ", parent).strip()
+    return normalized_key, normalized_stem, normalized_parent
+
+
+def storage_key_similarity_score(left_key: str, right_key: str) -> float:
+    left_normalized_key, left_stem, left_parent = normalized_storage_key_parts(left_key)
+    right_normalized_key, right_stem, right_parent = normalized_storage_key_parts(right_key)
+    if not left_stem or not right_stem:
+        return 0.0
+    left_scale = detect_spatial_scale(left_key)
+    right_scale = detect_spatial_scale(right_key)
+    if left_stem == right_stem:
+        return 1.0 if left_parent == right_parent else 0.98
+
+    stem_ratio = SequenceMatcher(None, left_stem, right_stem).ratio()
+    key_ratio = SequenceMatcher(None, left_normalized_key, right_normalized_key).ratio()
+    left_tokens = set(left_stem.split())
+    right_tokens = set(right_stem.split())
+    token_overlap = (
+        len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+        if left_tokens and right_tokens
+        else 0.0
+    )
+    parent_bonus = 0.05 if left_parent and left_parent == right_parent else 0.0
+    score = (stem_ratio * 0.7) + (key_ratio * 0.2) + (token_overlap * 0.1) + parent_bonus
+    if left_scale and right_scale and left_scale != right_scale:
+        score -= 0.08
+    return max(score, 0.0)
+
+
+def autofill_dataset_metadata_from_storage_key(
+    storage_key: str,
+    existing_rows: list[dict],
+) -> tuple[str, str | None]:
+    default_title = object_title_from_key(storage_key)
+    target_scale = detect_spatial_scale(storage_key)
+    best_match: dict | None = None
+    best_score = 0.0
+
+    for row in existing_rows:
+        candidate_key = str(row.get("storage_key") or "").strip()
+        if not candidate_key:
+            continue
+        candidate_title = str(row.get("title") or "").strip()
+        candidate_summary = str(row.get("summary") or "").strip() or None
+        if not candidate_title and not candidate_summary:
+            continue
+
+        score = storage_key_similarity_score(storage_key, candidate_key)
+        if score > best_score:
+            candidate_scale = detect_spatial_scale(candidate_key)
+            best_match = {
+                "title": candidate_title,
+                "summary": candidate_summary,
+                "spatial_scale": candidate_scale,
+            }
+            best_score = score
+
+    if not best_match or best_score < 0.85:
+        return default_title, None
+
+    title = best_match["title"] or default_title
+    summary = best_match["summary"]
+    if target_scale and best_match["spatial_scale"] and target_scale != best_match["spatial_scale"]:
+        title = rewrite_spatial_scale_terms(title, best_match["spatial_scale"], target_scale) or default_title
+        summary = rewrite_spatial_scale_terms(summary, best_match["spatial_scale"], target_scale)
+
+    return title, summary
 
 
 def parse_readme_selection(value: str | None) -> tuple[str | None, str | None]:
@@ -605,7 +739,23 @@ def load_collection_datasets(connection, collection_id: UUID) -> list[DatasetRec
         where d.collection_id = %(collection_id)s
           and d.visibility = 'listed'
         group by d.id
-        order by d.sort_order asc, d.published_at desc nulls last, d.title asc
+        order by
+          case d.classification
+            when 'public' then 1
+            when 'restricted' then 2
+            when 'confidential' then 3
+            else 4
+          end,
+          case d.dataset_role
+            when 'documentation' then 1
+            when 'visuals' then 2
+            when 'data' then 3
+            when 'GIS' then 4
+            else 5
+          end,
+          d.sort_order asc,
+          d.published_at desc nulls last,
+          d.title asc
         """,
         {"collection_id": str(collection_id)},
     ).fetchall()
@@ -738,7 +888,24 @@ def load_admin_dataset_rows(connection, collection_id: UUID | None = None) -> li
         params["collection_id"] = str(collection_id)
     query += """
         group by d.id, c.title
-        order by coalesce(c.title, ''), d.sort_order asc, d.published_at desc nulls last, d.title asc
+        order by
+          coalesce(c.title, ''),
+          case d.classification
+            when 'public' then 1
+            when 'restricted' then 2
+            when 'confidential' then 3
+            else 4
+          end,
+          case d.dataset_role
+            when 'documentation' then 1
+            when 'visuals' then 2
+            when 'data' then 3
+            when 'GIS' then 4
+            else 5
+          end,
+          d.sort_order asc,
+          d.published_at desc nulls last,
+          d.title asc
     """
     return connection.execute(query, params).fetchall()
 
@@ -747,6 +914,8 @@ def load_admin_dataset_page(
     connection,
     *,
     collection_id: UUID | None = None,
+    classification: str | None = None,
+    dataset_role: str | None = None,
     search: str | None = None,
     page: int = 1,
     page_size: int = 20,
@@ -759,6 +928,12 @@ def load_admin_dataset_page(
     if collection_id:
         conditions.append("d.collection_id = %(collection_id)s")
         params["collection_id"] = str(collection_id)
+    if classification:
+        conditions.append("d.classification = %(classification)s")
+        params["classification"] = classification
+    if dataset_role:
+        conditions.append("d.dataset_role = %(dataset_role)s")
+        params["dataset_role"] = dataset_role
     search_term = search.strip() if search else ""
     if search_term:
         params["search"] = f"%{search_term}%"
@@ -815,7 +990,24 @@ def load_admin_dataset_page(
         left join dataset_tags t on t.dataset_id = d.id
         {where_clause}
         group by d.id, c.title
-        order by coalesce(c.title, ''), d.sort_order asc, d.published_at desc nulls last, d.title asc
+        order by
+          coalesce(c.title, ''),
+          case d.classification
+            when 'public' then 1
+            when 'restricted' then 2
+            when 'confidential' then 3
+            else 4
+          end,
+          case d.dataset_role
+            when 'documentation' then 1
+            when 'visuals' then 2
+            when 'data' then 3
+            when 'GIS' then 4
+            else 5
+          end,
+          d.sort_order asc,
+          d.published_at desc nulls last,
+          d.title asc
         limit %(limit)s offset %(offset)s
         """,
         params,
@@ -1183,24 +1375,29 @@ def admin_context(
     current_section: str = "catalog",
     active_tab: str = "list-data",
     selected_collection_id: UUID | None = None,
+    dataset_classification: str = "",
+    dataset_role: str = "",
     collection_search: str = "",
     dataset_search: str = "",
     collection_page: int = 1,
     dataset_page: int = 1,
+    dataset_page_size: int = 20,
 ) -> dict:
-    page_size = 20
+    collection_page_size = 20
     collections, collection_total = load_admin_collection_page(
         connection,
         search=collection_search,
         page=collection_page,
-        page_size=page_size,
+        page_size=collection_page_size,
     )
     datasets, dataset_total = load_admin_dataset_page(
         connection,
         collection_id=selected_collection_id,
+        classification=dataset_classification or None,
+        dataset_role=dataset_role or None,
         search=dataset_search,
         page=dataset_page,
-        page_size=page_size,
+        page_size=dataset_page_size,
     )
     return {
         "request": request,
@@ -1218,17 +1415,20 @@ def admin_context(
         "edit_collection": edit_collection,
         "edit_dataset": edit_dataset,
         "selected_collection_id": str(selected_collection_id) if selected_collection_id else "",
+        "dataset_classification": dataset_classification,
+        "dataset_role": dataset_role,
         "collection_search": collection_search,
         "dataset_search": dataset_search,
+        "dataset_page_size": dataset_page_size,
         "collection_pager": build_pager(
             page=collection_page,
             total_items=collection_total,
-            page_size=page_size,
+            page_size=collection_page_size,
         ),
         "dataset_pager": build_pager(
             page=dataset_page,
             total_items=dataset_total,
-            page_size=page_size,
+            page_size=dataset_page_size,
         ),
     }
 
@@ -1567,8 +1767,11 @@ def admin_catalog(
     active_tab = str(request.query_params.get("tab", "list-data")).strip() or "list-data"
     collection_search = str(request.query_params.get("collection_q", "")).strip()
     dataset_search = str(request.query_params.get("dataset_q", "")).strip()
+    dataset_classification = str(request.query_params.get("classification", "")).strip()
+    dataset_role = str(request.query_params.get("dataset_role", "")).strip()
     collection_page = parse_page(request.query_params.get("collection_page"))
     dataset_page = parse_page(request.query_params.get("dataset_page"))
+    dataset_page_size = parse_page_size(request.query_params.get("dataset_page_size"))
     return templates.TemplateResponse(
         request,
         "admin_catalog.html",
@@ -1579,10 +1782,13 @@ def admin_catalog(
             current_section="catalog",
             active_tab=active_tab,
             selected_collection_id=selected_collection_id,
+            dataset_classification=dataset_classification,
+            dataset_role=dataset_role,
             collection_search=collection_search,
             dataset_search=dataset_search,
             collection_page=collection_page,
             dataset_page=dataset_page,
+            dataset_page_size=dataset_page_size,
         ),
     )
 
@@ -1989,6 +2195,7 @@ async def admin_import_datasets(
     collection_id = parse_optional_uuid(str(form.get("collection_id", "")).strip() or None)
     bucket = str(form.get("storage_bucket", "")).strip()
     prefix = str(form.get("storage_prefix", "")).strip()
+    classification = str(form.get("classification", "confidential")).strip() or "confidential"
     visibility = str(form.get("visibility", "listed")).strip() or "listed"
     selected_collection_id = collection_id
 
@@ -2059,8 +2266,9 @@ async def admin_import_datasets(
 
     existing_rows = connection.execute(
         """
-        select storage_bucket, storage_key, slug
+        select storage_bucket, storage_key, slug, title, summary, published_at
         from datasets
+        order by published_at desc nulls last
         """
     ).fetchall()
     existing_keys = {
@@ -2080,7 +2288,7 @@ async def admin_import_datasets(
                 skipped += 1
                 continue
 
-            title = object_title_from_key(key)
+            title, summary = autofill_dataset_metadata_from_storage_key(key, existing_rows)
             slug = build_unique_slug(slugify(title), existing_slugs)
             connection.execute(
                 """
@@ -2089,7 +2297,7 @@ async def admin_import_datasets(
                   storage_bucket, storage_key, file_size_bytes, sort_order, published_at
                 )
                 values (
-                  %(collection_id)s, %(slug)s, %(title)s, null, 'data', 'confidential', %(visibility)s,
+                  %(collection_id)s, %(slug)s, %(title)s, %(summary)s, 'data', %(classification)s, %(visibility)s,
                   %(storage_bucket)s, %(storage_key)s, %(file_size_bytes)s, %(sort_order)s, now()
                 )
                 """,
@@ -2097,6 +2305,8 @@ async def admin_import_datasets(
                     "collection_id": str(collection_id),
                     "slug": slug,
                     "title": title,
+                    "summary": summary,
+                    "classification": classification,
                     "visibility": visibility,
                     "storage_bucket": bucket,
                     "storage_key": key,
@@ -2106,6 +2316,18 @@ async def admin_import_datasets(
             )
             imported += 1
             existing_keys.add((bucket, key))
+            existing_rows.insert(
+                0,
+                {
+                    "storage_bucket": bucket,
+                    "storage_key": key,
+                    "slug": slug,
+                    "title": title,
+                    "summary": summary,
+                    "published_at": None,
+                },
+            )
+            existing_slugs.add(slug)
 
         connection.commit()
     except Exception:
@@ -2243,3 +2465,96 @@ async def admin_update_dataset(
             active_tab="list-data",
         ),
     )
+
+
+@app.post("/admin/datasets-reorder")
+async def admin_reorder_datasets(
+    request: Request,
+    connection=Depends(get_db_connection),
+    settings: Settings = Depends(get_settings),
+):
+    if not admin_authenticated(request, settings):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin login required.")
+
+    form = await request.form()
+    collection_id = parse_optional_uuid(str(form.get("collection_id", "")).strip() or None)
+    classification = str(form.get("classification", "")).strip() or None
+    dataset_role = str(form.get("dataset_role", "")).strip() or None
+    ordered_ids_raw = str(form.get("ordered_ids", "")).strip()
+    if not collection_id or not ordered_ids_raw:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Collection and ordered ids are required.")
+
+    ordered_ids: list[UUID] = []
+    seen_ids: set[UUID] = set()
+    for raw_value in ordered_ids_raw.split(","):
+        dataset_id = parse_optional_uuid(raw_value.strip() or None)
+        if not dataset_id or dataset_id in seen_ids:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ordered ids must be unique dataset ids.")
+        ordered_ids.append(dataset_id)
+        seen_ids.add(dataset_id)
+
+    filter_conditions = ["collection_id = %(collection_id)s"]
+    filter_params: dict[str, object] = {"collection_id": str(collection_id)}
+    if classification:
+        filter_conditions.append("classification = %(classification)s")
+        filter_params["classification"] = classification
+    if dataset_role:
+        filter_conditions.append("dataset_role = %(dataset_role)s")
+        filter_params["dataset_role"] = dataset_role
+
+    existing_ids = [
+        UUID(str(row["id"]))
+        for row in connection.execute(
+            f"""
+            select id
+            from datasets
+            where {' and '.join(filter_conditions)}
+            order by
+              case classification
+                when 'public' then 1
+                when 'restricted' then 2
+                when 'confidential' then 3
+                else 4
+              end,
+              case dataset_role
+                when 'documentation' then 1
+                when 'visuals' then 2
+                when 'data' then 3
+                when 'GIS' then 4
+                else 5
+              end,
+              sort_order asc,
+              published_at desc nulls last,
+              title asc
+            """,
+            filter_params,
+        ).fetchall()
+    ]
+    if not existing_ids:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection datasets not found.")
+    if set(existing_ids) != set(ordered_ids) or len(existing_ids) != len(ordered_ids):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ordered ids must include every dataset in the selected collection exactly once.",
+        )
+
+    try:
+        for sort_order, dataset_id in enumerate(ordered_ids, start=1):
+            connection.execute(
+                """
+                update datasets
+                set sort_order = %(sort_order)s
+                where id = %(dataset_id)s and collection_id = %(collection_id)s
+                """,
+                {
+                    "dataset_id": str(dataset_id),
+                    "collection_id": str(collection_id),
+                    "sort_order": sort_order,
+                },
+            )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

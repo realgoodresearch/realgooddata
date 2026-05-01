@@ -173,16 +173,13 @@ function renderCollectionCard(item) {
     <div class="collection-card-top">
       <div>
         <h2>${escapeHtml(item.title)}</h2>
-        <div class="slug">${escapeHtml(item.slug)}</div>
+        <div class="slug">Published: ${escapeHtml(published)}</div>
       </div>
     </div>
     <p class="summary">${escapeHtml(item.summary || "No summary provided.")}</p>
     ${tagsHtml}
     <div class="meta">
-      <span>${escapeHtml(published)}</span>
       <span>${item.counts.total} files</span>
-    </div>
-    <div class="count-list">
       <span class="count-pill public">${item.counts.public} public</span>
       <span class="count-pill restricted">${item.counts.restricted} restricted</span>
       <span class="count-pill confidential">${item.counts.confidential} confidential</span>
