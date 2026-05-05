@@ -167,6 +167,130 @@ MINIO_CONSOLE_PORT=9001
 `MINIO_BIND_ADDRESS` controls which host interface exposes the MinIO S3 API and
 console in the local stack.
 
+## MinIO TLS
+
+Production MinIO traffic from the cloud broker to the local storage server must
+use HTTPS. Keep normal DNS in Lightsail, and delegate only the ACME challenge
+name to Route 53 for automatic DNS-01 renewal.
+
+1. In Route 53, create a public hosted zone:
+
+```text
+_acme-challenge.minio.realgoodresearch.com
+```
+
+2. Copy the hosted zone's four Route 53 name servers.
+3. In the Lightsail DNS zone for `realgoodresearch.com`, add an `NS` record:
+
+```text
+Record name: _acme-challenge.minio
+Type: NS
+Value: the four Route 53 name servers
+```
+
+4. Create an IAM user for certbot and attach a policy scoped to that Route 53
+   hosted zone:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "route53:ListHostedZones",
+        "route53:GetChange"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "route53:ChangeResourceRecordSets",
+      "Resource": "arn:aws:route53:::hostedzone/ROUTE53_ACME_ZONE_ID",
+      "Condition": {
+        "ForAllValues:StringEquals": {
+          "route53:ChangeResourceRecordSetsRecordTypes": ["TXT"]
+        }
+      }
+    }
+  ]
+}
+```
+
+5. On the local storage server, install certbot's Route 53 plugin and add the IAM
+   access key to `/root/.aws/credentials`:
+
+```bash
+sudo apt install -y certbot python3-certbot-dns-route53
+sudo install -m 0700 -d /root/.aws
+sudo install -m 0600 /dev/null /root/.aws/credentials
+sudoedit /root/.aws/credentials
+```
+
+```ini
+[default]
+aws_access_key_id = replace-with-certbot-access-key
+aws_secret_access_key = replace-with-certbot-secret-key
+```
+
+6. Issue the certificate and copy it into MinIO's cert directory:
+
+```bash
+sudo certbot certonly --dns-route53 -d minio.realgoodresearch.com
+
+sudo install -m 0755 -d /home/realgooddata/minio-certs
+sudo install -m 0644 /etc/letsencrypt/live/minio.realgoodresearch.com/fullchain.pem /home/realgooddata/minio-certs/public.crt
+sudo install -m 0600 /etc/letsencrypt/live/minio.realgoodresearch.com/privkey.pem /home/realgooddata/minio-certs/private.key
+```
+
+7. On the local storage server, set:
+
+```env
+MINIO_CERTS_PATH=/home/realgooddata/minio-certs
+MINIO_HEALTHCHECK_URL=https://127.0.0.1:9000/minio/health/live
+```
+
+8. Restart local MinIO:
+
+```bash
+docker compose -f docker-compose.local.yml up -d --force-recreate minio
+```
+
+9. Add the renewal deploy hook:
+
+```bash
+sudo tee /etc/letsencrypt/renewal-hooks/deploy/reload-minio.sh >/dev/null <<'SH'
+#!/bin/sh
+set -eu
+
+DOMAIN=minio.realgoodresearch.com
+CERT_DIR=/home/realgooddata/minio-certs
+REPO_DIR=/home/realgooddata
+
+install -m 0644 "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" "${CERT_DIR}/public.crt"
+install -m 0600 "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" "${CERT_DIR}/private.key"
+
+cd "${REPO_DIR}"
+docker compose -f docker-compose.local.yml restart minio
+SH
+
+sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-minio.sh
+sudo certbot renew --dry-run
+```
+
+10. On the cloud host, set:
+
+```env
+MINIO_ENDPOINT=https://minio.realgoodresearch.com:9000
+MINIO_SECURE=true
+```
+
+Then restart the broker:
+
+```bash
+docker compose up -d --force-recreate broker-api
+```
+
 ## MinIO Broker Credentials
 
 Do not use the MinIO root credentials in the cloud broker `.env`. Create a
