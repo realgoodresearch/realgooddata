@@ -4,6 +4,7 @@ project:
 
 website:
   title: "Real Good Data"
+  favicon: assets/images/logo/favicon.ico
   search: false
   navbar:
     background: black
