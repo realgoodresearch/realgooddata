@@ -526,11 +526,11 @@ JSON Schemas for the collection, catalog, and download endpoints live in
 
 ## Quarto Frontend
 
-The generated `frontend/` directory is now treated as a build artifact and does
-not need to be committed. The Quarto source of truth lives under
+The generated `site/public_html/` directory is treated as a build artifact and
+does not need to be committed. The Quarto source of truth lives under
 [site](/home/doug/git/realgoodresearch/sysadmin/data-portal/site:1).
 
-The hand-served files in `frontend/` are produced by the Quarto-built site
+The hand-served files in `site/public_html/` are produced by the Quarto-built site
 defined under [site](/home/doug/git/realgoodresearch/sysadmin/data-portal/site:1).
 The Quarto source mirrors the typography and navigation style used in the main
 Real Good Research docs site, while the browser-side collection logic stays in:
@@ -538,14 +538,14 @@ Real Good Research docs site, while the browser-side collection logic stays in:
 - `site/assets/catalog.js` for the collection search page
 - `site/assets/collection-detail.js` for the collection detail page
 
-The Quarto project is configured to render directly into `frontend/`:
+The Quarto project is configured to render directly into `site/public_html/`:
 
 ```bash
 cd data-portal/site
 quarto render
 ```
 
-Render directly in place. Do not rename or replace the `frontend/` directory
+Render directly in place. Do not rename or replace the `site/public_html/` directory
 while Nginx is running, or the bind mount can point at a stale empty directory
 and return `403`.
 

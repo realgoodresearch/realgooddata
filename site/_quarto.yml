@@ -1,6 +1,6 @@
 project:
   type: website
-  output-dir: ../frontend
+  output-dir: public_html
 
 website:
   title: "Real Good Data"
