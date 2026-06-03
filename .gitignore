@@ -5,3 +5,6 @@ data/
 frontend/
 broker-api/config/tokens.json
 __pycache__/
+
+/.quarto/
+**/*.quarto_ipynb
