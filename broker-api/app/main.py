@@ -1442,6 +1442,32 @@ app.add_middleware(
     allow_methods=["GET", "OPTIONS"],
     allow_headers=["Accept", "Content-Type", "X-Access-Token"],
 )
+
+
+@app.middleware("http")
+async def public_collection_cors(request: Request, call_next):
+    path = request.url.path
+    is_public_collection = path == "/v1/collections" or (
+        path.startswith("/v1/collections/")
+        and "/download-all" not in path
+    )
+    if not is_public_collection:
+        return await call_next(request)
+
+    cors_headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Accept, Accept-Language, Content-Language, Content-Type, X-Access-Token",
+    }
+    if request.method == "OPTIONS":
+        return Response(status_code=200, headers=cors_headers)
+
+    response = await call_next(request)
+    for name, value in cors_headers.items():
+        response.headers[name] = value
+    return response
+
+
 app.mount("/admin/static", StaticFiles(directory=str(APP_DIR / "static")), name="admin-static")
 
 
