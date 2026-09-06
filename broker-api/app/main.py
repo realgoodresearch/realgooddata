@@ -23,6 +23,7 @@ from botocore.client import BaseClient
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -1434,6 +1435,13 @@ def admin_context(
 
 
 app = FastAPI(title="Real Good Research Broker API", version="0.3.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://realgoodresearch.com"],
+    allow_credentials=False,
+    allow_methods=["GET", "OPTIONS"],
+    allow_headers=["Accept", "Content-Type", "X-Access-Token"],
+)
 app.mount("/admin/static", StaticFiles(directory=str(APP_DIR / "static")), name="admin-static")
 
 
