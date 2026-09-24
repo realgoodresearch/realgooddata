@@ -16,6 +16,11 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v make >/dev/null 2>&1; then
+  echo "make is required to build MinIO. Install it with: sudo apt-get install make" >&2
+  exit 1
+fi
+
 if [ -e "${SOURCE_DIR}" ]; then
   echo "Source directory already exists: ${SOURCE_DIR}" >&2
   echo "Remove it or set BUILD_ROOT to another directory." >&2
