@@ -21,6 +21,30 @@ services:
     networks:
       - data_portal
 
+  minio:
+    image: minio/minio:latest
+    container_name: data-portal-minio
+    command: server /data --console-address ":9001" --certs-dir /certs
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER for MinIO}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD for MinIO}
+    volumes:
+      - ${MINIO_DATA_PATH:-./data/minio}:/data
+      - ${MINIO_CERTS_PATH:-./certbot/minio-certs}:/certs:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsSk ${MINIO_HEALTHCHECK_URL:-http://127.0.0.1:9000/minio/health/live}"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+    networks:
+      - data_portal
+
   broker-api:
     build:
       context: ./broker-api
@@ -34,11 +58,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-data_portal}
       POSTGRES_USER: ${POSTGRES_USER:-data_portal}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT:?set MINIO_ENDPOINT to the local MinIO API endpoint}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
       MINIO_REGION: ${MINIO_REGION:-us-east-1}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY for the broker MinIO service account}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY for the broker MinIO service account}
-      MINIO_SECURE: ${MINIO_SECURE:-true}
+      MINIO_SECURE: ${MINIO_SECURE:-false}
       PRESIGNED_URL_TTL_SECONDS: ${PRESIGNED_URL_TTL_SECONDS:-300}
       ADMIN_USERNAME: ${ADMIN_USERNAME}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
@@ -46,6 +70,8 @@ services:
       ADMIN_SESSION_TTL_SECONDS: ${ADMIN_SESSION_TTL_SECONDS:-43200}
     depends_on:
       postgres:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     expose:
       - "8000"
