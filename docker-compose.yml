@@ -118,6 +118,7 @@ services:
     volumes:
       - ./certbot/www:/var/www/certbot
       - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/aws:/root/.aws:ro
     networks:
       - data_portal
 

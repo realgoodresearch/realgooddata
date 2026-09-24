@@ -1,6 +1,7 @@
 .env
 certbot/conf/
 certbot/www/
+certbot/aws/
 data/
 frontend/
 site/public_html/
