@@ -31,6 +31,8 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD for MinIO}
     volumes:
       - ${MINIO_DATA_PATH:-./data/minio}:/data
+    ports:
+      - "${MINIO_CONSOLE_BIND_ADDRESS:-127.0.0.1}:9001:9001"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsSk ${MINIO_HEALTHCHECK_URL:-http://127.0.0.1:9000/minio/health/live}"]
       interval: 30s
