@@ -99,7 +99,9 @@ services:
       - data_portal
 
   certbot:
-    image: certbot/certbot:latest
+    build:
+      context: ./docker/certbot
+    image: realgooddata-certbot:latest
     container_name: data-portal-certbot
     restart: unless-stopped
     depends_on:
