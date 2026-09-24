@@ -41,7 +41,7 @@ git clone --depth 1 --branch "${MINIO_RELEASE}" \
 echo "Building ${MINIO_IMAGE}..."
 (
   cd "${SOURCE_DIR}"
-  go build -trimpath -o minio .
+  CGO_ENABLED=0 GOOS=linux go build -trimpath -o minio .
   docker build \
     --file "${REPO_DIR}/docker/minio/Dockerfile" \
     --tag "${MINIO_IMAGE}" \
