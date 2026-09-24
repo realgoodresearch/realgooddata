@@ -22,7 +22,7 @@ services:
       - data_portal
 
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     container_name: data-portal-minio
     command: server /data --console-address ":9001"
     restart: unless-stopped
