@@ -24,14 +24,13 @@ services:
   minio:
     image: minio/minio:latest
     container_name: data-portal-minio
-    command: server /data --console-address ":9001" --certs-dir /certs
+    command: server /data --console-address ":9001"
     restart: unless-stopped
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER for MinIO}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD for MinIO}
     volumes:
       - ${MINIO_DATA_PATH:-./data/minio}:/data
-      - ${MINIO_CERTS_PATH:-./certbot/minio-certs}:/certs:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -fsSk ${MINIO_HEALTHCHECK_URL:-http://127.0.0.1:9000/minio/health/live}"]
       interval: 30s
